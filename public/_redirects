@@ -1,4 +1,4 @@
-/receipt/*      /receipt/index.html  200
-/backoffice/*   /index.html          200
-/backoffice     /index.html          200
-/*              /index.html          200
+/receipt/*    /receipt/index.html  200
+/backoffice   /index.html          200
+/backoffice/* /index.html          200
+/*            /index.html          200
