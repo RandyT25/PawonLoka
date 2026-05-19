@@ -39,7 +39,7 @@ body{font-family:"Inter",system-ui,sans-serif;font-size:14px;-webkit-font-smooth
 .bo-sidebar-logo{padding:20px 16px 16px;border-bottom:1px solid rgba(255,255,255,0.06);}
 .bo-sidebar-logo-name{font-size:16px;font-weight:900;color:#fff;letter-spacing:-0.3px;}
 .bo-sidebar-logo-sub{font-size:10px;color:rgba(255,255,255,0.3);margin-top:2px;text-transform:uppercase;letter-spacing:1px;}
-.bo-nav{flex:1;padding:12px 8px;display:flex;flex-direction:column;gap:2px;}
+.bo-nav{flex:1;padding:12px 8px;display:flex;flex-direction:column;gap:2px;overflow-y:auto;}
 .bo-nav-item{display:flex;align-items:center;gap:10px;padding:9px 12px;border-radius:var(--r-lg);color:rgba(255,255,255,0.5);font-size:13px;font-weight:500;cursor:pointer;border:none;background:none;transition:all 0.12s;text-align:left;width:100%;}
 .bo-nav-item:hover{color:rgba(255,255,255,0.85);background:rgba(255,255,255,0.05);}
 .bo-nav-item.active{color:#fff;background:rgba(0,102,255,0.25);font-weight:700;}
