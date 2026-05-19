@@ -1,4 +1,3 @@
-
 import { useState, useEffect } from "react"
 import { supabase } from "../../lib/supabase"
 import * as XLSX from "xlsx"
@@ -8,103 +7,106 @@ import autoTable from "jspdf-autotable"
 function fmt(n) { return "Rp " + Number(n||0).toLocaleString("id-ID") }
 
 export default function Reports() {
-  const [orders, setOrders]   = useState([])
+  const [orders,  setOrders]  = useState([])
   const [loading, setLoading] = useState(true)
-  const [from, setFrom]       = useState(new Date().toISOString().slice(0,10))
-  const [to, setTo]           = useState(new Date().toISOString().slice(0,10))
+  const [from,    setFrom]    = useState(new Date().toISOString().slice(0,10))
+  const [to,      setTo]      = useState(new Date().toISOString().slice(0,10))
 
   useEffect(() => { load() }, [from, to])
 
   async function load() {
     setLoading(true)
-    const { data } = await supabase
+    const { data, error } = await supabase
       .from("orders")
-      .select("*, order_items(*)")
+      .select("*")
       .eq("status","Paid")
       .gte("created_at", from + "T00:00:00+08:00")
-      .lte("created_at", to + "T23:59:59+08:00")
+      .lte("created_at", to   + "T23:59:59+08:00")
       .order("created_at", { ascending: false })
+    if (error) console.error("Reports load error:", error)
     setOrders(data || [])
     setLoading(false)
   }
 
   const totalSales  = orders.reduce((s,o) => s+(o.total||0), 0)
   const totalOrders = orders.length
+  const totalCogs   = orders.reduce((s,o) => s+(o.cogs||0), 0)
+  const grossProfit = totalSales - totalCogs
   const avgOrder    = totalOrders ? Math.round(totalSales/totalOrders) : 0
 
-  const byPayment = orders.reduce((acc, o) => {
+  const byPayment = orders.reduce((acc,o) => {
     const m = o.pay || "Other"
     acc[m] = (acc[m]||0) + (o.total||0)
     return acc
   }, {})
 
-  const byDate = orders.reduce((acc, o) => {
+  const byDate = orders.reduce((acc,o) => {
     const d = o.created_at?.slice(0,10) || "?"
-    if (!acc[d]) acc[d] = { date:d, orders:0, sales:0 }
+    if (!acc[d]) acc[d] = { date:d, orders:0, sales:0, cogs:0 }
     acc[d].orders++
     acc[d].sales += o.total || 0
+    acc[d].cogs  += o.cogs  || 0
     return acc
   }, {})
 
-  function getRows() {
-    return orders.map(o => ({
-      Date:    o.created_at?.slice(0,10),
-      Time:    o.time || "",
-      "Order ID": o.code || o.id,
-      Table:   o.table || "Walk-in",
-      Cashier: o.staff || "-",
-      Payment: o.pay || "-",
-      Total:   o.total || 0,
-    }))
-  }
+  function tableName(o) { return o.table_name || o.table || "Walk-in" }
 
   function exportExcel() {
-    const rows = getRows()
+    const rows = orders.map(o => ({
+      Date:       o.created_at?.slice(0,10),
+      Time:       o.time || new Date(o.created_at).toLocaleTimeString("id-ID",{hour:"2-digit",minute:"2-digit"}),
+      "Order ID": o.code || o.id,
+      Table:      tableName(o),
+      Cashier:    o.staff || "-",
+      Payment:    o.pay   || "-",
+      Total:      o.total || 0,
+      COGS:       o.cogs  || 0,
+      "Gross Profit": (o.total||0) - (o.cogs||0),
+    }))
     const summary = [
-      { Label: "Period", Value: from + " to " + to },
-      { Label: "Total Sales", Value: totalSales },
-      { Label: "Total Orders", Value: totalOrders },
-      { Label: "Avg Order", Value: avgOrder },
+      { Label:"Period",        Value: from + " to " + to },
+      { Label:"Total Sales",   Value: totalSales },
+      { Label:"Total COGS",    Value: totalCogs },
+      { Label:"Gross Profit",  Value: grossProfit },
+      { Label:"Total Orders",  Value: totalOrders },
+      { Label:"Avg Order",     Value: avgOrder },
     ]
     const wb  = XLSX.utils.book_new()
-    const ws1 = XLSX.utils.json_to_sheet(rows)
-    const ws2 = XLSX.utils.json_to_sheet(summary)
-    XLSX.utils.book_append_sheet(wb, ws1, "Orders")
-    XLSX.utils.book_append_sheet(wb, ws2, "Summary")
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rows),    "Orders")
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(summary), "Summary")
     XLSX.writeFile(wb, "pawonloka-report-" + from + "-to-" + to + ".xlsx")
   }
 
   function exportPDF() {
     const doc = new jsPDF()
-    doc.setFontSize(16)
-    doc.setFont("helvetica","bold")
+    doc.setFontSize(16); doc.setFont("helvetica","bold")
     doc.text("PawonLoka - Sales Report", 14, 18)
-    doc.setFontSize(10)
-    doc.setFont("helvetica","normal")
+    doc.setFontSize(10); doc.setFont("helvetica","normal")
     doc.text("Period: " + from + " to " + to, 14, 26)
     doc.text("Total Sales: " + fmt(totalSales) + "  |  Orders: " + totalOrders + "  |  Avg: " + fmt(avgOrder), 14, 32)
-
+    doc.text("Gross Profit: " + fmt(grossProfit) + "  |  COGS: " + fmt(totalCogs), 14, 38)
     autoTable(doc, {
-      startY: 38,
-      head: [["Date","Order ID","Table","Cashier","Payment","Total"]],
+      startY: 44,
+      head: [["Date","Order ID","Table","Cashier","Payment","Total","COGS"]],
       body: orders.map(o => [
         o.created_at?.slice(0,10),
         o.code || o.id?.slice(-8),
-        o.table || "Walk-in",
+        tableName(o),
         o.staff || "-",
-        o.pay || "-",
+        o.pay   || "-",
         fmt(o.total),
+        fmt(o.cogs||0),
       ]),
-      styles: { fontSize: 9 },
-      headStyles: { fillColor: [0, 102, 255] },
-      alternateRowStyles: { fillColor: [244, 245, 247] },
+      styles:           { fontSize:9 },
+      headStyles:       { fillColor:[0,102,255] },
+      alternateRowStyles: { fillColor:[244,245,247] },
     })
-
     doc.save("pawonloka-report-" + from + "-to-" + to + ".pdf")
   }
 
   return (
     <div>
+      {/* Date filter toolbar */}
       <div style={{ display:"flex", gap:10, marginBottom:20, alignItems:"center", flexWrap:"wrap" }}>
         <div style={{ display:"flex", alignItems:"center", gap:8 }}>
           <label style={{ fontSize:12, fontWeight:600, color:"var(--ink4)" }}>From</label>
@@ -116,19 +118,19 @@ export default function Reports() {
         </div>
         {[["Today",0],["7 days",7],["30 days",30]].map(([l,d]) => (
           <button key={l} onClick={() => {
-            const t = new Date()
-            const f = new Date()
+            const t = new Date(), f = new Date()
             f.setDate(t.getDate() - d)
             setTo(t.toISOString().slice(0,10))
             setFrom(f.toISOString().slice(0,10))
-          }} className="bo-btn bo-btn-ghost">{l}</button>
+          }} className="bo-btn bo-btn-ghost bo-btn-sm">{l}</button>
         ))}
         <div style={{ marginLeft:"auto", display:"flex", gap:8 }}>
-          <button onClick={exportExcel} className="bo-btn bo-btn-ghost">Export Excel</button>
-          <button onClick={exportPDF} className="bo-btn bo-btn-primary">Export PDF</button>
+          <button onClick={exportExcel} className="bo-btn bo-btn-ghost">📊 Excel</button>
+          <button onClick={exportPDF}   className="bo-btn bo-btn-primary">📄 PDF</button>
         </div>
       </div>
 
+      {/* KPI Cards */}
       <div className="bo-metrics">
         <div className="bo-met blue">
           <div className="bo-met-label">Total Sales</div>
@@ -136,19 +138,21 @@ export default function Reports() {
           <div className="bo-met-sub">{totalOrders} orders</div>
         </div>
         <div className="bo-met green">
-          <div className="bo-met-label">Orders</div>
-          <div className="bo-met-val">{totalOrders}</div>
+          <div className="bo-met-label">Gross Profit</div>
+          <div className="bo-met-val">{fmt(grossProfit)}</div>
+          <div className="bo-met-sub">Margin {totalSales ? Math.round(grossProfit/totalSales*100) : 0}%</div>
         </div>
         <div className="bo-met amber">
           <div className="bo-met-label">Avg Order</div>
           <div className="bo-met-val">{fmt(avgOrder)}</div>
         </div>
         <div className="bo-met blue">
-          <div className="bo-met-label">Cash</div>
-          <div className="bo-met-val">{fmt(byPayment["Cash"]||0)}</div>
+          <div className="bo-met-label">Est. COGS</div>
+          <div className="bo-met-val">{fmt(totalCogs)}</div>
         </div>
       </div>
 
+      {/* Payment Breakdown + Daily Summary */}
       <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:16, marginBottom:16 }}>
         <div className="bo-card">
           <div className="bo-card-title">Payment Breakdown</div>
@@ -169,8 +173,10 @@ export default function Reports() {
           {Object.values(byDate).sort((a,b)=>b.date.localeCompare(a.date)).map(d => (
             <div key={d.date} style={{ display:"flex", justifyContent:"space-between", padding:"8px 0", borderBottom:"1px solid var(--surface2)" }}>
               <div>
-                <div style={{ fontSize:13, fontWeight:600 }}>{new Date(d.date).toLocaleDateString("id-ID",{weekday:"short",day:"numeric",month:"short"})}</div>
-                <div style={{ fontSize:11, color:"var(--ink5)" }}>{d.orders} orders</div>
+                <div style={{ fontSize:13, fontWeight:600 }}>
+                  {new Date(d.date).toLocaleDateString("id-ID",{weekday:"short",day:"numeric",month:"short"})}
+                </div>
+                <div style={{ fontSize:11, color:"var(--ink5)" }}>{d.orders} orders · GP {fmt(d.sales-d.cogs)}</div>
               </div>
               <div style={{ fontSize:13, fontWeight:700 }}>{fmt(d.sales)}</div>
             </div>
@@ -179,39 +185,47 @@ export default function Reports() {
         </div>
       </div>
 
+      {/* Orders table */}
       <div className="bo-card" style={{ padding:0, overflow:"hidden" }}>
-        <div style={{ padding:"14px 20px", borderBottom:"1px solid var(--surface3)", fontWeight:700 }}>All Orders</div>
-        {loading ? (
-          <div style={{ padding:40, textAlign:"center", color:"var(--ink5)" }}>Loading...</div>
-        ) : (
-          <table className="bo-table">
-            <thead>
-              <tr>
-                <th>Order</th>
-                <th>Date</th>
-                <th>Table</th>
-                <th>Cashier</th>
-                <th>Payment</th>
-                <th>Total</th>
-              </tr>
-            </thead>
-            <tbody>
-              {orders.map(o => (
-                <tr key={o.id}>
-                  <td style={{ fontWeight:600, fontFamily:"monospace", fontSize:12 }}>{o.code||o.id?.slice(-10)}</td>
-                  <td style={{ color:"var(--ink4)", fontSize:12 }}>{o.created_at?.slice(0,10)} {o.time||""}</td>
-                  <td>{o.table||"Walk-in"}</td>
-                  <td>{o.staff||"-"}</td>
-                  <td><span className="bo-badge bo-badge-blue">{o.pay||"-"}</span></td>
-                  <td style={{ fontWeight:700 }}>{fmt(o.total)}</td>
+        <div style={{ padding:"14px 20px", borderBottom:"1px solid var(--surface3)", display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+          <span style={{ fontWeight:700 }}>All Orders</span>
+          <span style={{ fontSize:12, color:"var(--ink5)" }}>{totalOrders} records</span>
+        </div>
+        {loading
+          ? <div style={{ padding:40, textAlign:"center", color:"var(--ink5)" }}>Loading...</div>
+          : <table className="bo-table">
+              <thead>
+                <tr>
+                  <th>Order</th>
+                  <th>Date & Time</th>
+                  <th>Table</th>
+                  <th>Cashier</th>
+                  <th>Payment</th>
+                  <th>COGS</th>
+                  <th>Total</th>
                 </tr>
-              ))}
-              {orders.length === 0 && (
-                <tr><td colSpan={6} style={{ textAlign:"center", color:"var(--ink5)", padding:"32px 0" }}>No orders in this period</td></tr>
-              )}
-            </tbody>
-          </table>
-        )}
+              </thead>
+              <tbody>
+                {orders.map(o => (
+                  <tr key={o.id}>
+                    <td style={{ fontWeight:600, fontFamily:"monospace", fontSize:12 }}>{o.code || o.id?.slice(-10)}</td>
+                    <td style={{ color:"var(--ink4)", fontSize:12 }}>
+                      {o.created_at?.slice(0,10)}{" "}
+                      {o.time || new Date(o.created_at).toLocaleTimeString("id-ID",{hour:"2-digit",minute:"2-digit"})}
+                    </td>
+                    <td>{tableName(o)}</td>
+                    <td>{o.staff || "-"}</td>
+                    <td><span className="bo-badge bo-badge-blue">{o.pay || "-"}</span></td>
+                    <td style={{ color:"var(--red)", fontSize:12 }}>{fmt(o.cogs||0)}</td>
+                    <td style={{ fontWeight:700 }}>{fmt(o.total)}</td>
+                  </tr>
+                ))}
+                {orders.length === 0 && (
+                  <tr><td colSpan={7} style={{ textAlign:"center", color:"var(--ink5)", padding:"32px 0" }}>No orders in this period</td></tr>
+                )}
+              </tbody>
+            </table>
+        }
       </div>
     </div>
   )
