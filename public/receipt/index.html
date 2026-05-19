@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+<title>Struk PawonLoka</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+<style>
+*{box-sizing:border-box;margin:0;padding:0;}
+body{font-family:"Courier New",monospace;background:#f0f0f0;display:flex;justify-content:center;padding:24px 12px;min-height:100vh;}
+.receipt{background:#fff;width:100%;max-width:360px;padding:24px 20px;border-radius:4px;box-shadow:0 2px 16px rgba(0,0,0,.1);}
+.logo{text-align:center;margin-bottom:16px;}
+.logo-name{font-size:20px;font-weight:900;letter-spacing:-.5px;}
+.logo-sub{font-size:11px;color:#888;margin-top:2px;}
+hr{border:none;border-top:1px dashed #ccc;margin:12px 0;}
+.meta{font-size:12px;color:#555;line-height:1.9;}
+.meta span{color:#111;font-weight:700;}
+.item-name{font-size:13px;font-weight:700;color:#111;margin-bottom:2px;}
+.row{display:flex;justify-content:space-between;font-size:12px;color:#555;}
+.grand{display:flex;justify-content:space-between;font-size:15px;font-weight:900;color:#111;padding:6px 0;border-top:1.5px solid #111;border-bottom:1.5px solid #111;margin:6px 0;}
+.footer{text-align:center;font-size:12px;color:#888;margin-top:16px;line-height:1.8;}
+.print-btn{display:block;width:100%;padding:12px;background:#0066FF;color:#fff;border:none;border-radius:8px;font-size:14px;font-weight:700;cursor:pointer;margin-top:20px;}
+.state{text-align:center;padding:60px 0;font-size:14px;color:#888;}
+.err{text-align:center;padding:60px 0;font-size:14px;color:#c0392b;}
+@media print{.print-btn{display:none;}body{background:none;padding:0;}.receipt{box-shadow:none;}}
+</style>
+</head>
+<body>
+<div class="receipt" id="receipt"><div class="state">Memuat struk...</div></div>
+<script>
+var SUPABASE_URL = "https://fnfivhnisigfnbvojonz.supabase.co";
+var SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZuZml2aG5pc2lnZm5idm9qb256Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzkwMjE2MzEsImV4cCI6MjA5NDU5NzYzMX0.8VE_PW4JO6H9Z5sIPCFy0jzLo6Zqo8_qzPRi9w9xBfU";
+var sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+function fmt(n){ return "Rp " + Number(n||0).toLocaleString("id-ID"); }
+function show(cls, msg){ document.getElementById("receipt").innerHTML = "<div class=\""+cls+"\">"+msg+"</div>"; }
+
+async function load() {
+  var params = new URLSearchParams(location.search);
+  var id = params.get("id");
+  if (!id) { show("err","ID struk tidak ditemukan."); return; }
+  var res = await sb.from("orders").select("*, order_items(*)").eq("id", id).single();
+  if (res.error || !res.data) { show("err","Struk tidak ditemukan."); return; }
+  var order  = res.data;
+  var items  = order.order_items || [];
+  var subtotal = items.reduce(function(s,i){ return s+(i.price*i.qty)-(i.discount||0); },0);
+  var taxAmt   = Math.round(subtotal*0.10);
+  var svcAmt   = Math.round(subtotal*0.05);
+  var total    = order.total || (subtotal+taxAmt+svcAmt-(order.discount||0));
+  var payments = order.payments || [];
+  var change   = order.change || 0;
+  var html = "";
+  html += "<div class=\"logo\">";
+  html += "<div class=\"logo-name\">PawonLoka</div>";
+  html += "<div class=\"logo-sub\">Jl. Raya Ubud No. 12, Bali</div>";
+  html += "<div class=\"logo-sub\">0361-123456</div></div><hr/>";
+  html += "<div class=\"meta\">";
+  html += "No. Order : <span>"+(order.code||order.id)+"</span><br/>";
+  html += "Meja      : <span>"+(order.table||"Walk-in")+"</span><br/>";
+  html += "Kasir     : <span>"+(order.cashier||"-")+"</span><br/>";
+  html += "Waktu     : <span>"+new Date(order.created_at).toLocaleString("id-ID")+"</span>";
+  html += "</div><hr/>";
+  html += "<div style=\"margin:12px 0;\">";
+  items.forEach(function(i){
+    html += "<div style=\"margin-bottom:8px;\">";
+    html += "<div class=\"item-name\">"+i.name+"</div>";
+    html += "<div class=\"row\"><span>"+i.qty+" x "+fmt(i.price)+"</span><span>"+fmt(i.qty*i.price)+"</span></div>";
+    if(i.note) html += "<div style=\"font-size:11px;color:#888;\">* "+i.note+"</div>";
+    if(i.discount) html += "<div class=\"row\"><span>Diskon</span><span>-"+fmt(i.discount)+"</span></div>";
+    html += "</div>";
+  });
+  html += "</div><hr/>";
+  html += "<div style=\"margin:12px 0;\">";
+  html += "<div class=\"row\"><span>Subtotal</span><span>"+fmt(subtotal)+"</span></div>";
+  html += "<div class=\"row\"><span>PPN 10%</span><span>"+fmt(taxAmt)+"</span></div>";
+  html += "<div class=\"row\"><span>Service 5%</span><span>"+fmt(svcAmt)+"</span></div>";
+  if(order.discount) html += "<div class=\"row\"><span>Diskon</span><span>-"+fmt(order.discount)+"</span></div>";
+  html += "<div class=\"grand\"><span>TOTAL</span><span>"+fmt(total)+"</span></div>";
+  payments.forEach(function(p){ html += "<div class=\"row\"><span>"+p.method+"</span><span>"+fmt(p.amount)+"</span></div>"; });
+  if(change) html += "<div class=\"row\"><span>Kembali</span><span>"+fmt(change)+"</span></div>";
+  html += "</div><hr/>";
+  html += "<div class=\"footer\">Terima kasih sudah makan di sini!<br/>pawonloka.id</div>";
+  html += "<button class=\"print-btn\" onclick=\"window.print()\">Cetak Struk</button>";
+  document.getElementById("receipt").innerHTML = html;
+}
+load();
+</script>
+</body>
+</html>

@@ -1,33 +1,103 @@
 import { useState, useEffect } from 'react'
 import { supabase } from '../lib/supabase'
-
-const fmt = n => 'Rp ' + Number(n || 0).toLocaleString('id-ID')
-const STAFF = [
-  { id:1, name:'Claudy', role:'Owner',      pin:'7777', color:'#6366F1' },
-  { id:2, name:'Nita',   role:'Head Kasir', pin:'4444', color:'#F59E0B' },
-  { id:3, name:'Aisyah', role:'Bar',        pin:'1111', color:'#10B981' },
-  { id:4, name:'Mahes',  role:'Cook',       pin:'2222', color:'#3B82F6' },
-  { id:5, name:'Meldy',  role:'Head Cook',  pin:'3333', color:'#8B5CF6' },
-  { id:6, name:'Oji',    role:'Cook',       pin:'5555', color:'#EF4444' },
-  { id:7, name:'Yudi',   role:'Cook',       pin:'6666', color:'#06B6D4' },
-]
-const PAY_METHODS = ['Cash', 'QRIS', 'Transfer', 'Debit', 'GoFood', 'GrabFood', 'ShopeeFood']
+import { fmt, TAX_RATE } from '../shared/constants'
+import useCart from './hooks/useCart'
+import useOrders from './hooks/useOrders'
+import PinLogin from './components/PinLogin'
+import MenuGrid from './components/MenuGrid'
+import Cart from './components/Cart'
+import ChargeModal from './components/ChargeModal'
+import ModifierModal from './components/ModifierModal'
+import CustomerSearch from './components/CustomerSearch'
+import ShiftModal from './components/ShiftModal'
+import VoidModal from './components/VoidModal'
+import CustomItemModal from './components/CustomItemModal'
+import PromoModal from './components/PromoModal'
+import CashInOutModal from './components/CashInOutModal'
+import SplitModal from './components/SplitModal'
+import FloorPlan from './components/FloorPlan'
+import TablePicker from './components/TablePicker'
+import OrdersModal from './components/OrdersModal'
+import PrinterSettings from './components/PrinterSettings'
+import { usePrinter } from './hooks/usePrinter'
+import { useWhatsApp } from './hooks/useWhatsApp'
+import './pos.mobile.css'
 
 export default function POS() {
   const [staff, setStaff]           = useState(null)
+  const [shift, setShift]           = useState(null)
   const [products, setProducts]     = useState([])
   const [categories, setCategories] = useState([])
-  const [cart, setCart]             = useState([])
-  const [activeTab, setActiveTab]   = useState('All')
-  const [search, setSearch]         = useState('')
   const [loading, setLoading]       = useState(true)
-  const [showCharge, setShowCharge] = useState(false)
-  const [payMethod, setPayMethod]   = useState('Cash')
-  const [cashGiven, setCashGiven]   = useState('')
-  const [orderDone, setOrderDone]   = useState(null)
   const [tableNo, setTableNo]       = useState('')
+  const [customer, setCustomer]     = useState(null)
+  const [discount, setDiscount]     = useState(0)
+  const [orderType, setOrderType]     = useState('Dine-in')
+  const [openBillId, setOpenBillId]   = useState(null)
+  const [deliveryFee, setDeliveryFee]   = useState(0)
+  const [deliveryAddr, setDeliveryAddr] = useState('')
 
-  useEffect(() => { if (staff) loadData() }, [staff])
+  // Modals
+  const [showShift, setShowShift]         = useState(false)
+  const [showSettings, setShowSettings]   = useState(false)
+  const [cartOpen, setCartOpen]           = useState(false)
+  const printer    = usePrinter()
+  const { sendReceipt, resendReceipt } = useWhatsApp()
+  const [showCharge, setShowCharge]       = useState(false)
+  const [showCustomer, setShowCustomer]   = useState(false)
+  const [modifierItem, setModifierItem]   = useState(null)
+  const [showReceipt, setShowReceipt]     = useState(false)
+  const [showVoid, setShowVoid]           = useState(false)
+  const [showOrders, setShowOrders]       = useState(false)
+  const [showCustomItem, setShowCustomItem] = useState(false)
+  const [showCashLog, setShowCashLog]       = useState(false)
+  const [showPromo, setShowPromo]           = useState(false)
+  const [appliedPromo, setAppliedPromo]     = useState(null)
+  const [splitPaid, setSplitPaid]           = useState(0)
+  const [showSplit, setShowSplit]           = useState(false)
+  const [showFloorPlan, setShowFloorPlan]   = useState(false)
+  const [showTablePicker, setShowTablePicker] = useState(false)
+  const [splitTotals, setSplitTotals]       = useState(null)
+
+
+  const { cart, setCart, addItem, updateQty, clearCart, subtotal } = useCart()
+  const { saveOrder, lastOrder, setLastOrder, saving } = useOrders()
+
+  useEffect(() => {
+    if (staff) {
+      loadData()
+      restoreShift()
+    }
+  }, [staff])
+
+  async function restoreShift() {
+    const today = new Date().toISOString().slice(0, 10)
+    // Close any stale open shifts from previous days
+    await supabase.from('shifts')
+      .update({ clock_out: 'auto-closed' })
+      .eq('staff', staff.name)
+      .is('clock_out', null)
+      .is('clockOut', null)
+      .is('clockOut', null)
+      .neq('date', today)
+    const { data } = await supabase
+      .from('shifts')
+      .select('*')
+      .eq('staff', staff.name)
+      .eq('date', today)
+      .is('clock_out', null)
+      .is('clockOut', null)
+      .is('clockOut', null)
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .single()
+    if (data) {
+      setShift(data)
+      setShowShift(false)
+    } else {
+      setShowShift(true)
+    }
+  }
 
   async function loadData() {
     const [{ data: prods }, { data: cats }] = await Promise.all([
@@ -39,307 +109,483 @@ export default function POS() {
     setLoading(false)
   }
 
-  if (!staff) return <PinLogin onLogin={setStaff} />
+  // PIN Login
+  if (!staff) return (
+    <PinLogin onLogin={s => { setStaff(s) }} />
+  )
 
-  const filtered = products.filter(p => {
-    const matchTab = activeTab === 'All' || p.cat === activeTab
-    const matchSearch = p.name.toLowerCase().includes(search.toLowerCase())
-    return matchTab && matchSearch
-  })
+  // Shift modal
+  if (showShift) return (
+    <ShiftModal
+      staff={staff}
+      shift={shift}
+      onOpen={s => { setShift(s); setShowShift(false) }}
+      onClose={() => { setShift(null); setShowShift(false) }}
+      onLogout={() => { setStaff(null); setShift(null); setShowShift(false); clearCart(); setCustomer(null); setTableNo(''); setOpenBillId(null) }}
+    />
+  )
 
-  function addToCart(product) {
-    setCart(prev => {
-      const existing = prev.find(i => i.sku === product.sku)
-      if (existing) return prev.map(i => i.sku === product.sku ? { ...i, qty: i.qty + 1 } : i)
-      return [...prev, { ...product, qty: 1 }]
-    })
+  const tax   = Math.round(subtotal * TAX_RATE)
+  const total = subtotal + tax
+
+  function handleProductSelect(product) {
+    setModifierItem(product)
   }
 
-  function updateQty(sku, delta) {
-    setCart(prev => {
-      const item = prev.find(i => i.sku === sku)
-      if (!item) return prev
-      if (item.qty + delta <= 0) return prev.filter(i => i.sku !== sku)
-      return prev.map(i => i.sku === sku ? { ...i, qty: i.qty + delta } : i)
-    })
+  function handleModifierConfirm(product, modifiers, note) {
+    addItem({ ...product, note }, modifiers)
+    setModifierItem(null)
   }
 
-  const subtotal = cart.reduce((a, i) => a + i.price * i.qty, 0)
-  const tax      = Math.round(subtotal * 0.1)
-  const total    = subtotal + tax
-  const change   = payMethod === 'Cash' ? (parseInt(cashGiven) || 0) - total : 0
 
-  async function handleCharge() {
-    const order = {
-      id:       'ORD-' + Date.now(),
-      items:    cart.map(i => ({ sku: i.sku, name: i.name, qty: i.qty, price: i.price })),
-      subtotal, tax, total,
-      pay:      payMethod,
-      staff:    staff.name,
-      table:    tableNo || null,
-      status:   'Paid',
-      date:     new Date().toISOString().slice(0, 10),
-      time:     new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }),
-      cogs:     0,
+  async function recallFromOrder(order) {
+    setCart(order.items.map((i, idx) => ({ ...i, _key: i.sku + '-' + idx, modifiers: i.modifiers || {}, _sent: i._sent || true, _station: i._station || '' })))
+    setTableNo(order.table || '')
+    setOpenBillId(order.id)
+    if (order.customer_id) {
+      const { data: cust } = await supabase.from('customers').select('*').eq('id', order.customer_id).single()
+      setCustomer(cust || (order.customer ? { name: order.customer, id: order.customer_id } : null))
+    } else if (order.customer) {
+      setCustomer({ name: order.customer, id: null })
+    } else {
+      setCustomer(null)
     }
-    await supabase.from('orders').insert(order)
-    setOrderDone(order)
-    setCart([])
-    setShowCharge(false)
-    setCashGiven('')
-    setTableNo('')
   }
+
+  function deleteBill(idx) {
+    setHeldBills(prev => prev.filter((_, i) => i !== idx))
+  }
+
+  function handleSplitCharge(amount, label) {
+    setShowSplit(false)
+    setShowCharge(true)
+    setSplitTotals({ ...splitTotals, total: amount, splitLabel: label })
+  }
+
+  function handleTableSelect(table) {
+    if (table.status === 'Reserved') return
+    if (table.status === 'Occupied' && table.open_bill_id) {
+      supabase.from('orders').select('*').eq('id', table.open_bill_id).single().then(({ data }) => {
+        if (data) { recallFromOrder(data); setOrderType('Dine-in'); setShowFloorPlan(false) }
+      })
+    } else {
+      clearCart(); setTableNo(table.name); setOrderType('Dine-in')
+      setCustomer(null); setOpenBillId(null); setShowFloorPlan(false)
+    }
+  }
+
+  function handleAddExtra(item) {
+    // Add unsent copy of sent item so it goes to kitchen
+    const extraItem = {
+      ...item,
+      qty: 1,
+      _key: item._key + '-extra-' + Date.now(),
+      _sent: false,
+      _station: undefined,
+    }
+    setCart(prev => [...prev, extraItem])
+  }
+
+  function handleCustomItem(item) {
+    addItem(item, {})
+  }
+
+  function handleNewOrder() {
+    clearCart()
+    setCustomer(null)
+    setTableNo('')
+    setDiscount(0)
+    setOpenBillId(null)
+    setDeliveryFee(0)
+    setDeliveryAddr('')
+    setOrderType('Dine-in')
+    setSplitPaid(0)
+    setAppliedPromo(null)
+  }
+
+  // Send Order = save as Open Bill + send kitchen tickets
+  async function handleSendOrder({ subtotal, tax, discAmt, total, fee }) {
+    if (cart.length === 0) return
+    const now = new Date()
+    const newItems = cart
+      .filter(i => !i._sent)
+      .map(i => ({ sku:i.sku||'', name:i.name, qty:i.qty, price:i.price, modifiers:i.modifiers||{}, note:i.note||'', cat:i.cat||'' }))
+
+    if (newItems.length === 0) {
+      // All already sent — just open charge
+      setShowCharge(true)
+      return
+    }
+
+    // Group new items by station
+    const { KITCHEN_STATIONS } = await import('../shared/constants')
+    const stations = {}
+    newItems.forEach(item => {
+      const station = KITCHEN_STATIONS[item.cat] || 'Kitchen'
+      if (!stations[station]) stations[station] = []
+      stations[station].push(item)
+    })
+
+    if (openBillId) {
+      // Add to existing open bill
+      const { data: existing } = await supabase.from('orders').select('items').eq('id', openBillId).single()
+      const allItems = [...(existing?.items || []), ...newItems.map(i => ({ ...i, _sent:true, _station: KITCHEN_STATIONS[i.cat]||'Kitchen' }))]
+      await supabase.from('orders').update({ items: allItems, subtotal, tax, discount: discAmt, total }).eq('id', openBillId)
+    } else {
+      // Create new open bill
+      const orderId = 'ORD-' + Date.now()
+      const order = {
+        id: orderId,
+        items: cart.map(i => ({ sku:i.sku||'', name:i.name, qty:i.qty, price:i.price, modifiers:i.modifiers||{}, note:i.note||'', cat:i.cat||'', _sent:true, _station: KITCHEN_STATIONS[i.cat]||'Kitchen' })),
+        subtotal, tax, discount: discAmt, total,
+        pay: '-', staff: staff.name, table: tableNo || null,
+        customer: customer ? customer.name : null, customer_id: customer ? customer.id : null,
+        status: 'Open', date: now.toISOString().slice(0,10),
+        time: now.toLocaleTimeString('id-ID', { hour:'2-digit', minute:'2-digit' }), cogs:0,
+      }
+      await supabase.from('orders').insert(order)
+      setOpenBillId(orderId)
+    }
+
+    // Send kitchen tickets per station
+    for (const [station, items] of Object.entries(stations)) {
+      await supabase.from('kitchen_tickets').insert({
+        id: 'KT-' + Date.now() + '-' + station,
+        table: tableNo || orderType,
+        items: items.map(i => ({ name:i.name, qty:i.qty, note:i.note, modifiers:i.modifiers })),
+        time: now.toLocaleTimeString('id-ID', { hour:'2-digit', minute:'2-digit' }),
+        status: 'New', station,
+      })
+    }
+
+    // Mark all cart items as sent
+    setCart(prev => prev.map(i => ({ ...i, _sent:true, _station: KITCHEN_STATIONS[i.cat]||'Kitchen' })))
+    alert('Order dikirim ke ' + Object.keys(stations).join(', ') + '!')
+  }
+
+  // Manager PIN required to remove sent item from open bill
+  async function handleManagerRemoveItem(item) {
+    const pin = prompt('Masukkan PIN Manager untuk hapus item:')
+    if (pin !== '9999') { alert('PIN salah'); return }
+    const reason = prompt('Alasan hapus item ' + item.name + ':')
+    if (!reason) return
+    const newCart = cart.filter(i => i._key !== item._key)
+    setCart(newCart)
+    if (openBillId) {
+      const sub = newCart.reduce((a,i) => a + i.price*i.qty, 0)
+      const discA = discount ? Math.round(sub*discount/100) : 0
+      const tx = Math.round((sub-discA)*0.1)
+      await supabase.from('orders').update({
+        items: newCart.map(i => ({ sku:i.sku||'', name:i.name, qty:i.qty, price:i.price, modifiers:i.modifiers||{}, note:i.note||'', cat:i.cat||'', _sent:i._sent||false, _station:i._station||'' })),
+        subtotal: sub, tax: tx, total: sub-discA+tx,
+        notes: (item.notes||'') + ' | REMOVE: ' + item.name + ' - ' + reason
+      }).eq('id', openBillId)
+    }
+  }
+
+  async function handleCharge({ payMethod, cashGiven, usePoints, finalTotal, splitLabel, orderNote, promoDisc = 0, promoName }) {
+    const discAmt = discount ? Math.round(subtotal * discount / 100) : 0
+
+    // SPLIT — record partial payment
+    if (splitLabel) {
+      const now = new Date()
+      const newSplitPaid = splitPaid + finalTotal
+      const billTotal = subtotal + Math.round(subtotal * 0.1) - discAmt
+      const isFullyPaid = newSplitPaid >= billTotal
+
+      if (openBillId) {
+        const { data: existing } = await supabase.from('orders').select('notes').eq('id', openBillId).single()
+        const prevNotes = existing?.notes || ''
+        const newNote = (prevNotes ? prevNotes + ' | ' : '') + 'SPLIT: ' + payMethod + ' Rp' + finalTotal
+        if (isFullyPaid) {
+          // All paid — close the bill
+          await supabase.from('orders').update({
+            status: 'Paid', pay: payMethod, notes: newNote, total: billTotal
+          }).eq('id', openBillId)
+          if (tableNo) await supabase.from('tables').update({ status: 'Available' }).eq('name', tableNo)
+          if (customer?.id) {
+            const pts = Math.floor(billTotal / 100)
+            await supabase.from('customers').update({ points: (customer.points||0)+pts, visits: (customer.visits||0)+1 }).eq('id', customer.id)
+          }
+        } else {
+          await supabase.from('orders').update({ notes: newNote }).eq('id', openBillId)
+        }
+      }
+
+      setSplitPaid(isFullyPaid ? 0 : newSplitPaid)
+
+      return {
+        id: openBillId || ('SPLIT-' + Date.now()),
+        total: finalTotal, pay: payMethod,
+        change: payMethod === 'Cash' ? (parseInt(cashGiven)||0) - finalTotal : 0,
+        date: now.toISOString().slice(0,10),
+        time: now.toLocaleTimeString('id-ID',{hour:'2-digit',minute:'2-digit'}),
+        staff: staff.name, customer: customer?.name || null, items: cart,
+        subtotal, tax: Math.round(subtotal*0.1), discount: discAmt,
+        _isSplit: !isFullyPaid, splitLabel, splitPaid: newSplitPaid,
+        _fullyPaid: isFullyPaid
+      }
+    }
+
+    // FULL PAYMENT — if open bill exists, update it to Paid instead of creating new
+    if (openBillId) {
+      const now = new Date()
+      await supabase.from('orders').update({
+        status: 'Paid', pay: payMethod,
+        cash_given: payMethod === 'Cash' ? parseInt(cashGiven) : null,
+        change: payMethod === 'Cash' ? (parseInt(cashGiven)||0) - finalTotal : null,
+        total: finalTotal, discount: discAmt + promoDisc,
+        notes: orderNote || null, promo: promoName || null,
+        time: now.toLocaleTimeString('id-ID',{hour:'2-digit',minute:'2-digit'}),
+      }).eq('id', openBillId)
+
+      // Update customer points
+      if (customer) {
+        const pts = Math.floor(finalTotal / 100)
+        await supabase.from('customers').update({
+          points: (customer.points || 0) + pts,
+          visits: (customer.visits || 0) + 1,
+        }).eq('id', customer.id)
+      }
+
+      // Update table back to Available
+      if (tableNo) {
+        await supabase.from('tables').update({ status: 'Available', open_bill_id: null }).eq('name', tableNo)
+      }
+
+      const fakeOrder = {
+        id: openBillId, total: finalTotal, pay: payMethod,
+        change: payMethod === 'Cash' ? (parseInt(cashGiven)||0) - finalTotal : 0,
+        date: now.toISOString().slice(0,10),
+        time: now.toLocaleTimeString('id-ID',{hour:'2-digit',minute:'2-digit'}),
+        staff: staff.name, customer: customer?.name || null, items: cart,
+        subtotal, tax: Math.round(subtotal*0.1), discount: discAmt + promoDisc,
+      }
+      clearCart(); setCustomer(null); setTableNo(''); setDiscount(0)
+      setOpenBillId(null); setOrderType('Dine-in'); setDeliveryFee(0)
+      setDeliveryAddr(''); setAppliedPromo(null); setSplitPaid(0)
+      return fakeOrder
+    }
+
+    // NO OPEN BILL — create new order
+    const order = await saveOrder({
+      cart, subtotal, payMethod, cashGiven,
+      staff, tableNo, customer, discount: discAmt + promoDisc,
+      orderNote, promoName, usePoints, finalTotal
+    })
+    if (order) {
+      clearCart(); setCustomer(null); setTableNo(''); setDiscount(0)
+      setOpenBillId(null); setOrderType('Dine-in'); setDeliveryFee(0)
+      setDeliveryAddr(''); setAppliedPromo(null); setSplitPaid(0)
+    }
+    return order
+  }
+
+  if (showFloorPlan) return (
+    <FloorPlan
+      staff={staff}
+      onSelectTable={handleTableSelect}
+      onTakeaway={() => { clearCart(); setOrderType('Takeaway'); setTableNo(''); setShowFloorPlan(false) }}
+      onDelivery={() => { clearCart(); setOrderType('Delivery'); setTableNo(''); setShowFloorPlan(false) }}
+    />
+  )
 
   if (loading) return (
-    <div style={S.center}>
-      <div style={{ fontSize: 40 }}>🏠</div>
-      <div style={{ fontSize: 16, fontWeight: 700, color: '#0A1628', marginTop: 8 }}>Loading menu...</div>
+    <div style={{ display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', height:'100vh', background:'#F4F7FA' }}>
+      <div style={{ fontSize:40 }}>🏠</div>
+      <div style={{ fontSize:16, fontWeight:700, color:'#0A1628', marginTop:8 }}>Loading menu...</div>
     </div>
   )
 
   return (
     <div style={S.app}>
       <div style={S.header}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-          <span style={{ fontSize: 18, fontWeight: 900, color: 'white' }}>🏠 PawonLoka</span>
+        <div style={{ display:'flex', alignItems:'center', gap:12 }}>
+          <span style={{ fontSize:18, fontWeight:900, color:'white' }}>PawonLoka</span>
           <span style={S.badge}>{staff.name} · {staff.role}</span>
+          {shift && <span style={{ fontSize:11, color:'#86EFAC', fontWeight:600 }}>Shift Open</span>}
         </div>
-        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-          <input value={tableNo} onChange={e => setTableNo(e.target.value)} placeholder="Table #" style={S.tableInput} />
-          <button onClick={() => setStaff(null)} style={S.logoutBtn}>Logout</button>
+        <div style={{ display:'flex', gap:8, alignItems:'center' }}>
+          <div style={{ position:'relative' }}>
+            <button onClick={() => setShowTablePicker(p => !p)}
+              style={{ ...S.headerBtn, background: tableNo ? '#10B981' : 'rgba(255,255,255,0.15)', color:'white', minWidth:100, fontWeight:700, lineHeight:1.2 }}>
+              <div>{tableNo || 'Table -'}</div>
+              {customer && <div style={{ fontSize:10, opacity:0.85, fontWeight:500 }}>{customer.name}</div>}
+            </button>
+            {showTablePicker && (
+              <TablePicker
+                current={tableNo}
+                onSelect={async t => {
+                  if (t !== tableNo) {
+                    if (openBillId) {
+                      await supabase.from('orders').update({ table: t }).eq('id', openBillId)
+                      await supabase.from('tables').update({ status: 'Occupied' }).eq('name', t)
+                      if (tableNo) await supabase.from('tables').update({ status: 'Available' }).eq('name', tableNo)
+                    }
+                  }
+                  setTableNo(t); setOrderType('Dine-in')
+                }}
+                onSelectOccupied={async t => {
+                  const { data } = await supabase.from('orders').select('*').eq('id', t.open_bill_id).single()
+                  if (data) await recallFromOrder(data)
+                  setOrderType('Dine-in')
+                }}
+                onClose={() => setShowTablePicker(false)}
+              />
+            )}
+          </div>
+          <button onClick={() => setShowCustomer(true)} style={S.headerBtn}>
+            {customer ? customer.name : '+ Customer'}
+          </button>
+          <button onClick={() => setShowOrders(true)} style={S.headerBtn}>Orders</button>
+          <button onClick={() => setShowCashLog(true)} style={S.headerBtn}>Cash</button>
+          <button onClick={() => setShowVoid(true)} style={{ ...S.headerBtn, color:'#FCA5A5' }}>Void</button>
+          <button onClick={() => setShowShift(true)} style={S.headerBtn}>Shift</button>
+          <button onClick={() => setShowSettings(true)} style={S.headerBtn}>Settings</button>
+          <button onClick={() => { setStaff(null); setShift(null) }} style={S.headerBtn}>Logout</button>
         </div>
       </div>
 
-      <div style={S.body}>
-        <div style={S.menu}>
-          <input style={S.search} placeholder="🔍 Search menu..." value={search} onChange={e => setSearch(e.target.value)} />
-          <div style={S.tabs}>
-            {['All', ...categories.map(c => c.name)].map(tab => (
-              <button key={tab} onClick={() => setActiveTab(tab)} style={{ ...S.tab, ...(activeTab === tab ? S.tabActive : {}) }}>{tab}</button>
-            ))}
-          </div>
-          <div style={S.grid}>
-            {filtered.map(p => (
-              <button key={p.sku} onClick={() => addToCart(p)} style={S.card}>
-                <div style={{ fontSize: 28 }}>{p.icon || '🍽️'}</div>
-                <div style={S.cardName}>{p.name}</div>
-                <div style={S.cardPrice}>{fmt(p.price)}</div>
-              </button>
-            ))}
-          </div>
+      <div style={S.body} className="pos-body">
+        <MenuGrid
+          products={products}
+          categories={categories}
+          onSelect={handleProductSelect}
+          onCustomItem={() => setShowCustomItem(true)}
+        />
+        <div className={"pos-cart-panel" + (cartOpen ? " mobile-open" : "")}>
+        <Cart
+          cart={cart}
+          onUpdateQty={updateQty}
+          onClear={clearCart}
+          onSendOrder={handleSendOrder}
+          onCharge={() => setShowCharge(true)}
+          onNewOrder={handleNewOrder}
+          tableNo={tableNo}
+          onTableNoChange={setTableNo}
+          customer={customer}
+          onShowCustomer={() => setShowCustomer(true)}
+          onRemoveCustomer={() => setCustomer(null)}
+          discount={discount}
+          onDiscountChange={setDiscount}
+          orderType={orderType}
+          onOrderTypeChange={setOrderType}
+          openBillId={openBillId}
+          onManagerRemoveItem={handleManagerRemoveItem}
+          onAddExtra={handleAddExtra}
+          onSplit={() => setSplitTotals({ subtotal, tax: Math.round(subtotal*0.1), total: subtotal+Math.round(subtotal*0.1) })}
+          deliveryFee={deliveryFee}
+          onDeliveryFeeChange={setDeliveryFee}
+          deliveryAddr={deliveryAddr}
+          onDeliveryAddrChange={setDeliveryAddr}
+        />
         </div>
-
-        <div style={S.cart}>
-          <div style={S.cartHd}>
-            <span style={{ fontSize: 16, fontWeight: 800 }}>Order {tableNo ? `· Table ${tableNo}` : ''}</span>
-            {cart.length > 0 && <button onClick={() => setCart([])} style={S.clearBtn}>Clear</button>}
-          </div>
-          <div style={S.cartItems}>
-            {cart.length === 0
-              ? <div style={S.empty}>Tap items to add</div>
-              : cart.map(item => (
-                <div key={item.sku} style={S.cartItem}>
-                  <div style={{ flex: 1 }}>
-                    <div style={{ fontWeight: 600, fontSize: 13 }}>{item.name}</div>
-                    <div style={{ fontSize: 12, color: '#3B82F6', fontWeight: 700, marginTop: 2 }}>
-                      {fmt(item.price)} × {item.qty} = {fmt(item.price * item.qty)}
-                    </div>
-                  </div>
-                  <div style={S.qtyRow}>
-                    <button onClick={() => updateQty(item.sku, -1)} style={S.qtyBtn}>−</button>
-                    <span style={S.qtyNum}>{item.qty}</span>
-                    <button onClick={() => updateQty(item.sku, +1)} style={S.qtyBtn}>+</button>
-                  </div>
-                </div>
-              ))
-            }
-          </div>
-          {cart.length > 0 && (
-            <div style={S.cartFt}>
-              <div style={S.totRow}><span style={{ color: '#6B7A8D', fontSize: 13 }}>Subtotal</span><span style={{ fontWeight: 600 }}>{fmt(subtotal)}</span></div>
-              <div style={S.totRow}><span style={{ color: '#6B7A8D', fontSize: 13 }}>Tax (10%)</span><span style={{ fontWeight: 600 }}>{fmt(tax)}</span></div>
-              <div style={{ ...S.totRow, marginTop: 8, paddingTop: 8, borderTop: '2px solid #E2E8F0' }}>
-                <span style={{ fontSize: 16, fontWeight: 800 }}>Total</span>
-                <span style={{ fontSize: 20, fontWeight: 900 }}>{fmt(total)}</span>
-              </div>
-              <button onClick={() => setShowCharge(true)} style={S.chargeBtn}>Charge {fmt(total)}</button>
-            </div>
-          )}
-        </div>
+        {/* Mobile cart backdrop */}
+        <div className={"cart-mobile-backdrop" + (cartOpen ? " show" : "")} onClick={() => setCartOpen(false)} />
+        {/* Cart FAB */}
+        <button className="cart-fab" onClick={() => setCartOpen(o => !o)}>
+          Cart {cart.length > 0 && <span style={{ background:"#fff", color:"#0066FF", borderRadius:12, padding:"1px 7px", fontSize:12, fontWeight:800, marginLeft:4 }}>{cart.reduce((s,i)=>s+i.qty,0)}</span>}
+        </button>
       </div>
+
+      {modifierItem && (
+        <ModifierModal
+          product={modifierItem}
+          onConfirm={handleModifierConfirm}
+          onCancel={() => setModifierItem(null)}
+        />
+      )}
 
       {showCharge && (
-        <div style={S.overlay}>
-          <div style={S.modal}>
-            <div style={S.modalHd}>
-              <span style={{ fontSize: 16, fontWeight: 800 }}>Charge Payment</span>
-              <button onClick={() => setShowCharge(false)} style={S.closeBtn}>✕</button>
-            </div>
-            <div style={{ padding: 20 }}>
-              <div style={S.summary}>
-                {cart.map(i => (
-                  <div key={i.sku} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, marginBottom: 6 }}>
-                    <span>{i.name} × {i.qty}</span><span style={{ fontWeight: 600 }}>{fmt(i.price * i.qty)}</span>
-                  </div>
-                ))}
-                <div style={{ borderTop: '1px solid #E2E8F0', marginTop: 8, paddingTop: 8 }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: '#6B7A8D', marginBottom: 4 }}>
-                    <span>Tax (10%)</span><span>{fmt(tax)}</span>
-                  </div>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 900, fontSize: 18 }}>
-                    <span>Total</span><span>{fmt(total)}</span>
-                  </div>
-                </div>
-              </div>
-              <div style={{ marginBottom: 16 }}>
-                <div style={S.label}>Payment Method</div>
-                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-                  {PAY_METHODS.map(m => (
-                    <button key={m} onClick={() => setPayMethod(m)} style={{ ...S.payBtn, ...(payMethod === m ? S.payBtnActive : {}) }}>{m}</button>
-                  ))}
-                </div>
-              </div>
-              {payMethod === 'Cash' && (
-                <div style={{ marginBottom: 16 }}>
-                  <div style={S.label}>Cash Given</div>
-                  <input type="number" value={cashGiven} onChange={e => setCashGiven(e.target.value)} placeholder="Enter amount" style={S.input} autoFocus />
-                  <div style={{ display: 'flex', gap: 8, marginTop: 8, flexWrap: 'wrap' }}>
-                    {[total, Math.ceil(total/10000)*10000, Math.ceil(total/50000)*50000, 100000].filter((v,i,a)=>a.indexOf(v)===i).map(amt => (
-                      <button key={amt} onClick={() => setCashGiven(String(amt))} style={S.quickBtn}>{fmt(amt)}</button>
-                    ))}
-                  </div>
-                  {cashGiven && (
-                    <div style={{ marginTop: 12, padding: 12, background: change >= 0 ? '#F0FDF4' : '#FFF1F2', borderRadius: 10 }}>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 700, fontSize: 15, color: change >= 0 ? '#16A34A' : '#DC2626' }}>
-                        <span>Change</span><span>{fmt(Math.abs(change))}{change < 0 ? ' (short)' : ''}</span>
-                      </div>
-                    </div>
-                  )}
-                </div>
-              )}
-              <button onClick={handleCharge} disabled={payMethod === 'Cash' && (!cashGiven || change < 0)}
-                style={{ ...S.chargeBtn, opacity: payMethod === 'Cash' && (!cashGiven || change < 0) ? 0.4 : 1 }}>
-                ✓ Confirm Payment
-              </button>
-            </div>
-          </div>
-        </div>
+        <ChargeModal
+          cart={cart}
+          totals={{ subtotal, tax: Math.round(subtotal*0.1), total: subtotal+Math.round(subtotal*0.1), fee: parseFloat(deliveryFee)||0, discount, splitPaid }}
+          customer={customer}
+          onConfirm={handleCharge}
+          onClose={() => setShowCharge(false)}
+          onSuccess={async () => { setShowCharge(false); if (tableNo) { await supabase.from('tables').update({ status: 'Available' }).eq('name', tableNo) } clearCart(); setCustomer(null); setTableNo(''); setOpenBillId(null); setDiscount(0); setSplitPaid(0); setAppliedPromo(null); setDeliveryFee(0); setDeliveryAddr('') }}
+          appliedPromo={appliedPromo}
+          onOpenPromo={() => { setShowCharge(false); setShowPromo(true) }}
+        />
       )}
 
-      {orderDone && (
-        <div style={S.overlay}>
-          <div style={{ ...S.modal, maxWidth: 380 }}>
-            <div style={{ textAlign: 'center', padding: '24px 20px 0' }}>
-              <div style={{ fontSize: 48 }}>✅</div>
-              <div style={{ fontSize: 20, fontWeight: 900, marginTop: 8 }}>Payment Received!</div>
-              <div style={{ fontSize: 13, color: '#6B7A8D', marginTop: 4 }}>Order {orderDone.id}</div>
-            </div>
-            <div style={{ padding: '16px 20px' }}>
-              <div style={S.summary}>
-                {orderDone.items.map(i => (
-                  <div key={i.sku} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, marginBottom: 4 }}>
-                    <span>{i.name} × {i.qty}</span><span>{fmt(i.price * i.qty)}</span>
-                  </div>
-                ))}
-                <div style={{ borderTop: '1px solid #E2E8F0', marginTop: 8, paddingTop: 8 }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: '#6B7A8D', marginBottom: 4 }}>
-                    <span>Tax</span><span>{fmt(orderDone.tax)}</span>
-                  </div>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 900, fontSize: 16 }}>
-                    <span>Total</span><span>{fmt(orderDone.total)}</span>
-                  </div>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, color: '#6B7A8D', marginTop: 4 }}>
-                    <span>Payment</span><span style={{ fontWeight: 600 }}>{orderDone.pay}</span>
-                  </div>
+      {showCustomer && (
+        <CustomerSearch
+          onSelect={async c => {
+            setCustomer(c)
+            setShowCustomer(false)
+            if (openBillId) {
+              await supabase.from('orders').update({
+                customer: c.name,
+                customer_id: c.id
+              }).eq('id', openBillId)
+            }
+          }}
+          onClose={() => setShowCustomer(false)}
+        />
+      )}
+
+      {showOrders && (
+        <OrdersModal
+          onClose={() => setShowOrders(false)}
+          onRecall={recallFromOrder}
+        />
+      )}
+
+      {showVoid && (
+        <VoidModal onClose={() => setShowVoid(false)} />
+      )}
+
+      {showCashLog && (
+        <CashInOutModal staff={staff} onClose={() => setShowCashLog(false)} />
+      )}
+      {/* Settings Panel */}
+      {showSettings && (
+          <div onClick={e => { if(e.target===e.currentTarget) setShowSettings(false) }}
+            style={{ position:'fixed', inset:0, background:'rgba(9,30,66,0.6)', zIndex:2000, display:'flex', justifyContent:'flex-end' }}>
+            <div style={{ width:'min(360px,100vw)', background:'#fff', display:'flex', flexDirection:'column', boxShadow:'-4px 0 24px rgba(9,30,66,0.2)', overflowY:'auto' }}>
+              <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', padding:'16px 20px', background:'#0A1628', flexShrink:0 }}>
+                <div>
+                  <div style={{ fontSize:16, fontWeight:900, color:'white' }}>POS Settings</div>
+                  <div style={{ fontSize:11, color:'rgba(255,255,255,0.4)', marginTop:2 }}>Terminal configuration</div>
                 </div>
+                <button onClick={() => setShowSettings(false)}
+                  style={{ background:'rgba(255,255,255,0.1)', border:'none', color:'white', width:32, height:32, borderRadius:'50%', fontSize:18, cursor:'pointer' }}>x</button>
               </div>
-              <button onClick={() => setOrderDone(null)} style={S.chargeBtn}>New Order</button>
+              <div style={{ flex:1, overflowY:'auto', padding:16, display:'flex', flexDirection:'column', gap:16 }}>
+                <div style={{ fontSize:13, fontWeight:700, color:'#091E42', paddingBottom:8, borderBottom:'1px solid #DFE1E6' }}>Printer & Hardware</div>
+                <PrinterSettings hook={printer} />
+              </div>
             </div>
           </div>
-        </div>
       )}
-    </div>
-  )
-}
 
-function PinLogin({ onLogin }) {
-  const [pin, setPin]     = useState('')
-  const [error, setError] = useState('')
+      {showPromo && (
+        <PromoModal
+          subtotal={subtotal}
+          customer={customer}
+          onApply={p => { setAppliedPromo(p); setShowPromo(false) }}
+          onClose={() => setShowPromo(false)}
+        />
+      )}
 
-  function handlePin(digit) {
-    if (pin.length >= 4) return
-    const newPin = pin + digit
-    setPin(newPin)
-    if (newPin.length === 4) {
-      const found = STAFF.find(s => s.pin === newPin)
-      if (found) { onLogin(found); setPin('') }
-      else { setError('Wrong PIN'); setTimeout(() => { setPin(''); setError('') }, 1000) }
-    }
-  }
+      {showCustomItem && (
+        <CustomItemModal
+          onAdd={handleCustomItem}
+          onClose={() => setShowCustomItem(false)}
+        />
+      )}
 
-  return (
-    <div style={S.loginWrap}>
-      <div style={S.loginCard}>
-        <div style={{ fontSize: 52, marginBottom: 8 }}>🏠</div>
-        <div style={{ fontSize: 24, fontWeight: 900, color: '#0A1628', marginBottom: 4 }}>PawonLoka</div>
-        <div style={{ fontSize: 14, color: '#6B7A8D', marginBottom: 24 }}>Enter your PIN</div>
-        <div style={{ display: 'flex', justifyContent: 'center', gap: 12, marginBottom: 16 }}>
-          {[0,1,2,3].map(i => (
-            <div key={i} style={{ width:14, height:14, borderRadius:'50%', background: pin.length > i ? '#0A1628' : 'white', border: '2px solid ' + (pin.length > i ? '#0A1628' : '#CBD5E1'), transition:'all 0.1s' }} />
-          ))}
-        </div>
-        {error && <div style={{ color:'#EF4444', fontSize:13, fontWeight:600, marginBottom:8 }}>{error}</div>}
-        <div style={{ display:'grid', gridTemplateColumns:'repeat(3,1fr)', gap:10 }}>
-          {['1','2','3','4','5','6','7','8','9','','0','⌫'].map((d,i) => (
-            <button key={i} style={{ ...S.numKey, visibility: d==='' ? 'hidden' : 'visible' }}
-              onClick={() => d==='⌫' ? setPin(p => p.slice(0,-1)) : handlePin(d)}>{d}</button>
-          ))}
-        </div>
-      </div>
+      {showTablePicker === false && null}
+
     </div>
   )
 }
 
 const S = {
-  app:         { display:'flex', flexDirection:'column', height:'100vh', background:'#F4F7FA', fontFamily:'-apple-system,BlinkMacSystemFont,sans-serif' },
-  center:      { display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', height:'100vh', background:'#F4F7FA' },
-  header:      { display:'flex', justifyContent:'space-between', alignItems:'center', padding:'12px 20px', background:'#0A1628', flexShrink:0 },
-  badge:       { fontSize:12, background:'rgba(255,255,255,0.15)', color:'white', padding:'4px 10px', borderRadius:20 },
-  tableInput:  { padding:'7px 12px', borderRadius:8, border:'1px solid rgba(255,255,255,0.2)', background:'rgba(255,255,255,0.1)', color:'white', fontSize:13, width:80, outline:'none' },
-  logoutBtn:   { fontSize:12, background:'rgba(255,255,255,0.1)', color:'white', border:'1px solid rgba(255,255,255,0.2)', padding:'7px 14px', borderRadius:8, cursor:'pointer' },
-  body:        { display:'flex', flex:1, overflow:'hidden' },
-  menu:        { flex:1, display:'flex', flexDirection:'column', overflow:'hidden', padding:16, gap:10 },
-  search:      { padding:'10px 14px', borderRadius:12, border:'1.5px solid #E2E8F0', fontSize:14, outline:'none', background:'white', flexShrink:0 },
-  tabs:        { display:'flex', gap:6, overflowX:'auto', flexShrink:0, paddingBottom:2 },
-  tab:         { padding:'7px 16px', borderRadius:20, border:'1.5px solid #E2E8F0', background:'white', fontSize:13, fontWeight:600, cursor:'pointer', whiteSpace:'nowrap', color:'#6B7A8D', flexShrink:0 },
-  tabActive:   { background:'#0A1628', borderColor:'#0A1628', color:'white' },
-  grid:        { display:'grid', gridTemplateColumns:'repeat(auto-fill,minmax(130px,1fr))', gap:10, overflowY:'auto', flex:1 },
-  card:        { background:'white', border:'1.5px solid #E2E8F0', borderRadius:14, padding:14, cursor:'pointer', textAlign:'center', display:'flex', flexDirection:'column', gap:6, outline:'none' },
-  cardName:    { fontSize:13, fontWeight:700, color:'#0A1628', lineHeight:1.3 },
-  cardPrice:   { fontSize:12, fontWeight:700, color:'#3B82F6' },
-  cart:        { width:320, background:'white', borderLeft:'1px solid #E2E8F0', display:'flex', flexDirection:'column', flexShrink:0 },
-  cartHd:      { padding:'16px 20px', borderBottom:'1px solid #E2E8F0', display:'flex', justifyContent:'space-between', alignItems:'center', flexShrink:0 },
-  clearBtn:    { fontSize:12, color:'#EF4444', background:'#FEF2F2', border:'none', padding:'4px 10px', borderRadius:8, cursor:'pointer', fontWeight:600 },
-  cartItems:   { flex:1, overflowY:'auto' },
-  empty:       { padding:40, textAlign:'center', color:'#94A3B8', fontSize:14 },
-  cartItem:    { padding:'10px 20px', borderBottom:'1px solid #F1F5F9', display:'flex', alignItems:'center', gap:12 },
-  qtyRow:      { display:'flex', alignItems:'center', gap:8, flexShrink:0 },
-  qtyBtn:      { width:28, height:28, borderRadius:8, border:'1.5px solid #E2E8F0', background:'white', fontSize:16, cursor:'pointer', fontWeight:700, display:'flex', alignItems:'center', justifyContent:'center' },
-  qtyNum:      { fontSize:14, fontWeight:700, minWidth:20, textAlign:'center' },
-  cartFt:      { padding:20, borderTop:'2px solid #E2E8F0', flexShrink:0 },
-  totRow:      { display:'flex', justifyContent:'space-between', marginBottom:6 },
-  chargeBtn:   { width:'100%', padding:16, background:'#0A1628', color:'white', border:'none', borderRadius:14, fontSize:15, fontWeight:800, cursor:'pointer', marginTop:12 },
-  overlay:     { position:'fixed', inset:0, background:'rgba(9,30,66,0.6)', display:'flex', alignItems:'center', justifyContent:'center', padding:16, zIndex:1000 },
-  modal:       { background:'white', borderRadius:20, width:'100%', maxWidth:480, maxHeight:'90vh', overflow:'auto', boxShadow:'0 20px 60px rgba(9,30,66,0.3)' },
-  modalHd:     { padding:'16px 20px', borderBottom:'1px solid #E2E8F0', display:'flex', justifyContent:'space-between', alignItems:'center' },
-  closeBtn:    { width:28, height:28, borderRadius:'50%', background:'#F1F5F9', border:'none', cursor:'pointer', fontSize:14 },
-  summary:     { background:'#F8FAFC', borderRadius:12, padding:14, marginBottom:16 },
-  label:       { fontSize:12, fontWeight:700, color:'#6B7A8D', textTransform:'uppercase', letterSpacing:'0.5px', marginBottom:8 },
-  payBtn:      { padding:'8px 14px', borderRadius:10, border:'1.5px solid #E2E8F0', background:'white', fontSize:13, fontWeight:600, cursor:'pointer', color:'#6B7A8D' },
-  payBtnActive:{ background:'#0A1628', borderColor:'#0A1628', color:'white' },
-  input:       { width:'100%', padding:'12px 14px', borderRadius:10, border:'1.5px solid #E2E8F0', fontSize:15, outline:'none', boxSizing:'border-box' },
-  quickBtn:    { padding:'6px 12px', borderRadius:8, border:'1.5px solid #E2E8F0', background:'white', fontSize:12, cursor:'pointer', fontWeight:600 },
-  loginWrap:   { display:'flex', alignItems:'center', justifyContent:'center', height:'100vh', background:'linear-gradient(135deg,#0A1628 0%,#1E3A5F 100%)' },
-  loginCard:   { background:'white', borderRadius:24, padding:'32px 28px', width:300, textAlign:'center', boxShadow:'0 20px 60px rgba(0,0,0,0.4)' },
-  numKey:      { padding:16, borderRadius:14, border:'1.5px solid #E2E8F0', background:'white', fontSize:20, fontWeight:700, cursor:'pointer', color:'#0A1628', outline:'none' },
+  app:       { display:'flex', flexDirection:'column', height:'100vh', background:'#F4F7FA', fontFamily:'-apple-system,BlinkMacSystemFont,sans-serif' },
+  header:    { display:'flex', justifyContent:'space-between', alignItems:'center', padding:'10px 16px', background:'#0A1628', flexShrink:0, flexWrap:'wrap', gap:8 },
+  badge:     { fontSize:12, background:'rgba(255,255,255,0.15)', color:'white', padding:'4px 10px', borderRadius:20 },
+  headerBtn: { fontSize:12, background:'rgba(255,255,255,0.1)', color:'white', border:'1px solid rgba(255,255,255,0.2)', padding:'7px 12px', borderRadius:8, cursor:'pointer', whiteSpace:'nowrap' },
+  body:      { display:'flex', flex:1, overflow:'hidden' },
 }
