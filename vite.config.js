@@ -26,13 +26,19 @@ export default defineConfig({
         ],
       },
       workbox: {
-        // Cache all built assets
         globPatterns: ["**/*.{js,css,html,ico,png,svg,woff2,json}"],
-        // Don't cache Supabase auth tokens
-        navigateFallback: "/",
+        navigateFallback: "/index.html",
         navigateFallbackDenylist: [/^\/backoffice/],
         runtimeCaching: [
-          // Supabase API — NetworkFirst: use cache if offline
+          {
+            urlPattern: ({ url }) => url.hostname.includes("supabase.co") && url.pathname.includes("/storage/"),
+            handler: "CacheFirst",
+            options: {
+              cacheName: "product-images-cache",
+              expiration: { maxEntries: 100, maxAgeSeconds: 604800 },
+              cacheableResponse: { statuses: [0, 200] },
+            },
+          },
           {
             urlPattern: ({ url }) => url.hostname.includes("supabase.co"),
             handler: "NetworkFirst",
@@ -43,17 +49,6 @@ export default defineConfig({
               cacheableResponse: { statuses: [0, 200] },
             },
           },
-          // Supabase storage (product images) — CacheFirst
-          {
-            urlPattern: ({ url }) => url.hostname.includes("supabase.co") && url.pathname.includes("/storage/"),
-            handler: "CacheFirst",
-            options: {
-              cacheName: "product-images-cache",
-              expiration: { maxEntries: 100, maxAgeSeconds: 604800 },
-              cacheableResponse: { statuses: [0, 200] },
-            },
-          },
-          // Google Fonts
           {
             urlPattern: /^https:\/\/fonts\.(googleapis|gstatic)\.com\/.*/i,
             handler: "CacheFirst",

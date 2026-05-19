@@ -1,4 +1,3 @@
-
 import { useState, useEffect, useCallback, useRef } from "react";
 import { supabase } from "../../lib/supabase";
 
@@ -12,7 +11,7 @@ export function useOrders() {
     try {
       let q = supabase
         .from("orders")
-        .select("*, order_items(*)")
+        .select("*")
         .order("created_at", { ascending: false })
         .limit(200);
       if (status) q = q.eq("status", status);
