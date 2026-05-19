@@ -4,9 +4,13 @@ import POS from "./pos/POS"
 import Backoffice from "./backoffice/Backoffice"
 
 function App() {
-  const [ready, setReady] = useState(false)
+  const path = window.location.pathname
+  const isBackoffice = path === "/backoffice" || path.startsWith("/backoffice/")
+
+  const [ready, setReady] = useState(isBackoffice) // backoffice skips seed
 
   useEffect(() => {
+    if (isBackoffice) return // skip seed for backoffice
     seedDatabase().then(() => setReady(true))
   }, [])
 
@@ -16,8 +20,7 @@ function App() {
     </div>
   )
 
-  const path = window.location.pathname
-  if (path === "/backoffice" || path.startsWith("/backoffice/")) return <Backoffice />
+  if (isBackoffice) return <Backoffice />
   return <POS />
 }
 
