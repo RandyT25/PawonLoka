@@ -2,8 +2,9 @@ import { useState, useEffect } from "react"
 import { supabase } from "../../../lib/supabase"
 
 const PAYMENT_TERMS = ["Cash on Delivery","Net 7","Net 14","Net 30","Net 60","Prepaid"]
+const CAT_COLORS = { Protein:"var(--red)", Vegetables:"var(--green)", General:"var(--brand)", Packaging:"#6554C0", Beverages:"#00B8D9", "Dry Goods":"var(--amber)", Bakery:"#FF8B00", Other:"var(--ink5)" }
 
-const SUPPLIER_SEED = [
+const SEED = [
   { id:"SUP001", name:"Supplier Daging Kambing", contact:"", phone:"", email:"", address:"", category:"Protein",    payment_terms:"Cash on Delivery", active:true },
   { id:"SUP002", name:"Supplier Ayam",            contact:"", phone:"", email:"", address:"", category:"Protein",    payment_terms:"Cash on Delivery", active:true },
   { id:"SUP003", name:"Tukang Sayur",             contact:"", phone:"", email:"", address:"", category:"Vegetables", payment_terms:"Cash on Delivery", active:true },
@@ -23,7 +24,6 @@ const SUPPLIER_SEED = [
 ]
 
 const EMPTY = { name:"", contact:"", phone:"", email:"", address:"", category:"General", payment_terms:"Cash on Delivery", active:true }
-const CAT_COLORS = { Protein:"var(--red)", Vegetables:"var(--green)", General:"var(--brand)", Packaging:"#6554C0", Beverages:"#00B8D9", "Dry Goods":"var(--amber)", Bakery:"#FF8B00", Other:"var(--ink5)" }
 
 export default function InvSuppliers() {
   const [suppliers, setSuppliers] = useState([])
@@ -31,23 +31,20 @@ export default function InvSuppliers() {
   const [form,      setForm]      = useState(EMPTY)
   const [saving,    setSaving]    = useState(false)
   const [loading,   setLoading]   = useState(true)
-  const [seeding,   setSeeding]   = useState(false)
 
   useEffect(() => { load() }, [])
 
   async function load() {
     setLoading(true)
     const { data } = await supabase.from("suppliers").select("*").order("name")
-    setSuppliers(data||[])
+    if (!data || data.length === 0) {
+      await supabase.from("suppliers").upsert(SEED, { onConflict:"id", ignoreDuplicates:true })
+      const { data: seeded } = await supabase.from("suppliers").select("*").order("name")
+      setSuppliers(seeded||[])
+    } else {
+      setSuppliers(data)
+    }
     setLoading(false)
-  }
-
-  async function seedSuppliers() {
-    if (!confirm("Import 16 suppliers from your POS data?")) return
-    setSeeding(true)
-    await supabase.from("suppliers").upsert(SUPPLIER_SEED, { onConflict:"id", ignoreDuplicates:true })
-    await load()
-    setSeeding(false)
   }
 
   function openAdd()   { setForm(EMPTY); setModal("add") }
@@ -78,39 +75,21 @@ export default function InvSuppliers() {
     <div>
       <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:16 }}>
         <span style={{ fontSize:13, color:"var(--ink4)", fontWeight:600 }}>{suppliers.length} suppliers</span>
-        <div style={{ display:"flex", gap:8 }}>
-          {suppliers.length === 0 && (
-            <button onClick={seedSuppliers} disabled={seeding} className="bo-btn bo-btn-ghost">
-              {seeding ? "Importing..." : "↻ Import from POS"}
-            </button>
-          )}
-          <button onClick={openAdd} className="bo-btn bo-btn-primary">+ Add Supplier</button>
-        </div>
+        <button onClick={openAdd} className="bo-btn bo-btn-primary">+ Add Supplier</button>
       </div>
-
-      {!loading && suppliers.length === 0 && (
-        <div style={{ textAlign:"center", padding:48, background:"#fff", border:"1px solid var(--surface3)", borderRadius:16, marginBottom:16 }}>
-          <div style={{ fontSize:36, marginBottom:12 }}>🏭</div>
-          <div style={{ fontSize:15, fontWeight:700, marginBottom:6 }}>No suppliers yet</div>
-          <div style={{ fontSize:13, color:"var(--ink5)", marginBottom:16 }}>Import your 16 suppliers from POS data</div>
-          <button onClick={seedSuppliers} disabled={seeding} className="bo-btn bo-btn-primary">
-            {seeding ? "Importing..." : "↻ Import 16 Suppliers from POS"}
-          </button>
-        </div>
-      )}
 
       {loading ? <div style={{ padding:40, textAlign:"center", color:"var(--ink5)" }}>Loading...</div> : (
         <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fill,minmax(260px,1fr))", gap:12 }}>
           {suppliers.map(s => {
-            const catColor = CAT_COLORS[s.category] || "var(--ink5)"
+            const c = CAT_COLORS[s.category] || "var(--ink5)"
             return (
               <div key={s.id} style={{ background:"#fff", border:"1.5px solid var(--surface3)", borderRadius:16, overflow:"hidden", opacity:s.active?1:0.6 }}>
-                <div style={{ height:6, background:catColor }} />
+                <div style={{ height:6, background:c }} />
                 <div style={{ padding:16 }}>
                   <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", marginBottom:8 }}>
                     <div>
                       <div style={{ fontSize:14, fontWeight:800, color:"var(--ink)" }}>{s.name}</div>
-                      <span style={{ fontSize:10, fontWeight:700, padding:"2px 7px", borderRadius:10, background:catColor+"22", color:catColor, marginTop:3, display:"inline-block" }}>{s.category}</span>
+                      <span style={{ fontSize:10, fontWeight:700, padding:"2px 7px", borderRadius:10, background:c+"22", color:c, marginTop:3, display:"inline-block" }}>{s.category}</span>
                     </div>
                     <span className={"bo-badge "+(s.active?"bo-badge-green":"bo-badge-amber")}>{s.active?"Active":"Inactive"}</span>
                   </div>
@@ -128,6 +107,7 @@ export default function InvSuppliers() {
               </div>
             )
           })}
+          {suppliers.length===0 && <div style={{ gridColumn:"1/-1", textAlign:"center", color:"var(--ink5)", padding:40 }}>No suppliers yet. Click + Add Supplier.</div>}
         </div>
       )}
 
@@ -165,7 +145,7 @@ export default function InvSuppliers() {
             </div>
             <div className="bo-modal-footer">
               <button onClick={closeModal} className="bo-btn bo-btn-ghost">Cancel</button>
-              <button onClick={save} disabled={saving||!form.name} className="bo-btn bo-btn-primary">{saving?"Saving...":modal==="add"?"Add Supplier":"Save"}</button>
+              <button onClick={save} disabled={saving||!form.name} className="bo-btn bo-btn-primary">{saving?"Saving...":modal==="add"?"Add":"Save"}</button>
             </div>
           </div>
         </div>
