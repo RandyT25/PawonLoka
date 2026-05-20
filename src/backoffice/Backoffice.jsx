@@ -194,7 +194,7 @@ export default function Backoffice() {
           <div className="bo-topbar-title">{NAV.find(n=>n.id===active)?.label}</div>
           <div className="bo-topbar-date">{new Date().toLocaleDateString("id-ID",{weekday:"long",year:"numeric",month:"long",day:"numeric"})}</div>
         </div>
-        <div className="bo-content"><Screen /></div>
+        <div className="bo-content"><Screen onNavChange={setActive} /></div>
       </div>
     </div>
   )
