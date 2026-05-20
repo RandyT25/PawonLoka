@@ -229,24 +229,21 @@ export default function InvIngredients() {
 
   useEffect(() => { load() }, [])
 
-  async function load() {
+  async function load(autoSeed = false) {
     setLoading(true)
     const [{ data:ings }, { data:sups }] = await Promise.all([
       supabase.from("ingredients").select("*").order("name"),
       supabase.from("suppliers").select("id,name"),
     ])
-    setIngredients(ings||[])
+    if ((!ings || ings.length === 0) || autoSeed) {
+      await supabase.from("ingredients").upsert(INGREDIENT_SEED, { onConflict:"sku", ignoreDuplicates:true })
+      const { data:seeded } = await supabase.from("ingredients").select("*").order("name")
+      setIngredients(seeded||[])
+    } else {
+      setIngredients(ings||[])
+    }
     setSuppliers(sups||[])
     setLoading(false)
-  }
-
-  async function seedIngredients() {
-    if (!confirm(`Import ${INGREDIENT_SEED.length} ingredients? Existing records won't be overwritten.`)) return
-    setSeeding(true)
-    const { error } = await supabase.from("ingredients").upsert(INGREDIENT_SEED, { onConflict:"sku", ignoreDuplicates:true })
-    if (error) alert("Error: " + error.message)
-    await load()
-    setSeeding(false)
   }
 
   const lowStock = ingredients.filter(i => i.min_stock > 0 && i.stock <= i.min_stock && i.stock > 0)
@@ -305,23 +302,11 @@ export default function InvIngredients() {
             <span style={{ position:"absolute", left:10, top:"50%", transform:"translateY(-50%)", color:"var(--ink5)" }}>⌕</span>
             <input value={search} onChange={e=>setSearch(e.target.value)} className="bo-input" placeholder="Search..." style={{ paddingLeft:28, width:180 }} />
           </div>
-          <button onClick={seedIngredients} disabled={seeding} className="bo-btn bo-btn-ghost">
-            {seeding ? "Importing..." : "↻ Import from POS"}
-          </button>
           <button onClick={openAdd} className="bo-btn bo-btn-primary">+ Add Ingredient</button>
         </div>
       </div>
 
-      {!loading && ingredients.length === 0 && (
-        <div style={{ textAlign:"center", padding:48, background:"#fff", border:"1px solid var(--surface3)", borderRadius:16, marginBottom:16 }}>
-          <div style={{ fontSize:36, marginBottom:12 }}>🧂</div>
-          <div style={{ fontSize:15, fontWeight:700, marginBottom:6 }}>No ingredients yet</div>
-          <div style={{ fontSize:13, color:"var(--ink5)", marginBottom:16 }}>Import your 206 ingredients from your POS data</div>
-          <button onClick={seedIngredients} disabled={seeding} className="bo-btn bo-btn-primary">
-            {seeding ? "Importing..." : "↻ Import 206 Ingredients from POS"}
-          </button>
-        </div>
-      )}
+
 
       <div className="bo-card" style={{ padding:0, overflow:"hidden" }}>
         {loading ? <div style={{ padding:40, textAlign:"center", color:"var(--ink5)" }}>Loading...</div> : (
