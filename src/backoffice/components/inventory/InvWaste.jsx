@@ -56,6 +56,15 @@ export default function InvWaste() {
     })
     // Deduct from stock
     await supabase.from("ingredients").update({ stock:Math.max(0,(ing.stock||0)-parseFloat(form.qty)) }).eq("id",ing.id)
+    // Log movement
+    await supabase.from("stock_movements").insert({
+      id:"MOV-"+Date.now()+"-"+Math.random().toString(36).slice(2,6),
+      type:"Waste", ingredient_id:ing.id, ingredient_name:ing.name,
+      qty:-parseFloat(form.qty), unit:form.unit||ing.unit, ref:wstId,
+      note:form.reason+(form.notes?" — "+form.notes:""),
+      date:form.date,
+      time:new Date().toLocaleTimeString("id-ID",{hour:"2-digit",minute:"2-digit"})
+    })
     await load()
     setModal(false)
     setForm({ ingredient_id:"", qty:"", unit:"", reason:"Expired", date:new Date().toISOString().slice(0,10), recorded_by:"", notes:"" })

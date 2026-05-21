@@ -55,13 +55,30 @@ export default function InvProduction() {
       date:form.date, produced_by:form.produced_by, notes:form.notes||null,
       ingredients_used, status:"Completed"
     })
-    // Deduct used ingredients stock
+    // Deduct used ingredients stock + log
     for (const u of validItems) {
       const ing = ingredients.find(i=>i.id===u.ingredient_id)
-      if (ing) await supabase.from("ingredients").update({ stock:Math.max(0,(ing.stock||0)-parseFloat(u.qty)) }).eq("id",ing.id)
+      if (!ing) continue
+      await supabase.from("ingredients").update({ stock:Math.max(0,(ing.stock||0)-parseFloat(u.qty)) }).eq("id",ing.id)
+      await supabase.from("stock_movements").insert({
+        id:"MOV-"+Date.now()+"-"+Math.random().toString(36).slice(2,6),
+        type:"Production", ingredient_id:ing.id, ingredient_name:ing.name,
+        qty:-parseFloat(u.qty), unit:u.unit||ing.unit, ref:batchId,
+        note:"Used in production: "+item.name,
+        date:form.date,
+        time:new Date().toLocaleTimeString("id-ID",{hour:"2-digit",minute:"2-digit"})
+      })
     }
-    // Add to semi-finished stock
+    // Add to semi-finished stock + log
     await supabase.from("ingredients").update({ stock:(item.stock||0)+parseFloat(form.batch_qty) }).eq("id",item.id)
+    await supabase.from("stock_movements").insert({
+      id:"MOV-"+Date.now()+"-"+Math.random().toString(36).slice(2,6),
+      type:"Production", ingredient_id:item.id, ingredient_name:item.name,
+      qty:parseFloat(form.batch_qty), unit:form.unit||item.unit, ref:batchId,
+      note:"Produced batch",
+      date:form.date,
+      time:new Date().toLocaleTimeString("id-ID",{hour:"2-digit",minute:"2-digit"})
+    })
     await load()
     setModal(false)
     setForm({ item_id:"", batch_qty:"", unit:"", date:new Date().toISOString().slice(0,10), produced_by:"", notes:"" })

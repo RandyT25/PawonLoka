@@ -4,64 +4,119 @@ import { supabase } from "../../../lib/supabase"
 function fmt(n) { return "Rp " + Number(n||0).toLocaleString("id-ID") }
 const UNITS = ["gr","kg","ml","L","Galon","pcs","Ekor","butir","biji","buah","ikat","lembar","bungkus","pack","sachet","botol","tsp","tbsp","cup","porsi","portion"]
 
-// Convert purchase qty to base unit using ingredient conversions
 function toBaseUnit(ing, qty, purchaseUnit) {
   if (purchaseUnit === ing.unit) return qty
   const conv = (ing.conversions||[]).find(c => c.unit === purchaseUnit)
-  if (conv && conv.qty > 0) return qty * parseFloat(conv.qty)
-  // Common fallbacks
+  if (conv && parseFloat(conv.qty) > 0) return qty * parseFloat(conv.qty)
   const fallbacks = { kg:1000, L:1000, Galon:19000 }
   if (ing.unit==="gr" && fallbacks[purchaseUnit]) return qty * fallbacks[purchaseUnit]
   if (ing.unit==="ml" && fallbacks[purchaseUnit]) return qty * fallbacks[purchaseUnit]
   return qty
 }
 
-// Recalculate WAC for ingredient after receiving stock
 async function recalcWAC(ing, qtyBase, totalCostForBatch) {
-  const oldStock      = ing.stock || 0
-  const oldCost       = ing.cost_per_unit || 0
-  const oldTotalCost  = ing.total_purchase_cost || (oldStock * oldCost)
-  const oldTotalStock = ing.total_purchased || oldStock
-
-  const newTotalCost  = oldTotalCost + totalCostForBatch
-  const newTotalStock = oldTotalStock + qtyBase
-  const newWAC        = newTotalStock > 0 ? newTotalCost / newTotalStock : oldCost
-  const newStock      = oldStock + qtyBase
-
+  const oldStock     = parseFloat(ing.stock) || 0
+  const oldCost      = parseFloat(ing.cost_per_unit) || 0
+  const newTotalCost = (oldStock * oldCost) + totalCostForBatch
+  const newStock     = oldStock + qtyBase
+  const newWAC       = newStock > 0 ? newTotalCost / newStock : oldCost
   await supabase.from("ingredients").update({
-    stock:               newStock,
-    cost_per_unit:       newWAC,
-    total_purchased:     newTotalStock,
-    total_purchase_cost: newTotalCost,
+    stock:         newStock,
+    cost_per_unit: newWAC,
   }).eq("id", ing.id)
-
   return newWAC
 }
 
-// Cascade: recalculate sub-recipe costs, then dish costs
+// Full cascade: ingredient WAC updated → recalc sub-recipes → recalc dishes
 async function cascadeRecalc(updatedIngIds) {
-  // Get all recipes that use updated ingredients
-  const { data: affectedRecipes } = await supabase
-    .from("recipes")
-    .select("*, recipe_lines(*)")
+  if (!updatedIngIds.length) return
+
+  // 1. Get all recipe_lines that use updated ingredients
+  const { data: affectedLines } = await supabase
+    .from("recipe_lines")
+    .select("recipe_id, ingredient_id, qty, unit")
     .in("ingredient_id", updatedIngIds)
 
-  // For each affected sub-recipe, recalculate its cost_per_unit
-  const subIds = []
-  for (const r of affectedRecipes || []) {
-    if (r.type === "sub" || r.ingredient_id) {
-      subIds.push(r.id)
+  if (!affectedLines || !affectedLines.length) return
+
+  // Unique recipe IDs affected
+  const affectedRecipeIds = [...new Set(affectedLines.map(l => l.recipe_id))]
+
+  // 2. For each affected recipe, recalculate its total cost
+  const { data: recipes } = await supabase
+    .from("recipes")
+    .select("id, type, product_id, ingredient_id, yield_qty")
+    .in("id", affectedRecipeIds)
+
+  if (!recipes || !recipes.length) return
+
+  // Get fresh ingredient costs
+  const { data: allIngs } = await supabase
+    .from("ingredients")
+    .select("id, cost_per_unit, unit, conversions")
+
+  const ingMap = {}
+  for (const i of allIngs || []) ingMap[i.id] = i
+
+  // Get all lines for these recipes
+  const { data: allLines } = await supabase
+    .from("recipe_lines")
+    .select("*")
+    .in("recipe_id", affectedRecipeIds)
+
+  const linesByRecipe = {}
+  for (const l of allLines || []) {
+    if (!linesByRecipe[l.recipe_id]) linesByRecipe[l.recipe_id] = []
+    linesByRecipe[l.recipe_id].push(l)
+  }
+
+  const updatedSubIngIds = []
+
+  for (const recipe of recipes) {
+    const lines = linesByRecipe[recipe.id] || []
+    let totalCost = 0
+
+    for (const line of lines) {
+      const ing = ingMap[line.ingredient_id]
+      if (!ing) continue
+      // Convert line qty to base unit
+      let qtyInBase = parseFloat(line.qty) || 0
+      if (line.unit && line.unit !== ing.unit) {
+        const conv = (ing.conversions||[]).find(c => c.unit === line.unit)
+        if (conv && parseFloat(conv.qty) > 0) {
+          qtyInBase = qtyInBase * parseFloat(conv.qty)
+        }
+      }
+      totalCost += qtyInBase * (ing.cost_per_unit || 0)
+    }
+
+    if (recipe.type === "sub" && recipe.ingredient_id) {
+      // Sub-recipe: update the ingredient's cost_per_unit (cost per yield unit)
+      const yieldQty = parseFloat(recipe.yield_qty) || 1
+      const costPerYield = totalCost / yieldQty
+      await supabase.from("ingredients")
+        .update({ cost_per_unit: costPerYield })
+        .eq("id", recipe.ingredient_id)
+      ingMap[recipe.ingredient_id] = { ...ingMap[recipe.ingredient_id], cost_per_unit: costPerYield }
+      updatedSubIngIds.push(recipe.ingredient_id)
+    } else if (recipe.type === "dish" && recipe.product_id) {
+      // Dish: update product COGS and margin
+      const { data: product } = await supabase
+        .from("products")
+        .select("price")
+        .eq("id", recipe.product_id)
+        .single()
+      const price = product?.price || 0
+      const margin = price > 0 ? Math.round(((price - totalCost) / price) * 100) : 0
+      await supabase.from("products")
+        .update({ cogs: Math.round(totalCost), margin })
+        .eq("id", recipe.product_id)
     }
   }
 
-  // Get all dish recipes that use affected subs — recalculate COGS
-  if (subIds.length) {
-    const { data: dishes } = await supabase
-      .from("recipes")
-      .select("product_id")
-      .in("ingredient_id", subIds)
-    // Trigger dish COGS recalc — handled in Recipes module
-    console.log("Cascade: dishes to recalc", dishes?.map(d=>d.product_id))
+  // 3. If sub-recipes updated, cascade into dishes that use those sub-ingredients
+  if (updatedSubIngIds.length) {
+    await cascadeRecalc(updatedSubIngIds)
   }
 }
 
@@ -95,27 +150,22 @@ export default function InvPO() {
   const paid    = pos.filter(p => p.status==="Paid")
   const overdue = pos.filter(p => p.status==="Unpaid" && p.due_date && new Date(p.due_date)<new Date())
   const voided  = pos.filter(p => p.status==="Void")
-
   const filtered = filter==="all" ? pos : filter==="unpaid" ? unpaid : filter==="paid" ? paid : filter==="overdue" ? overdue : voided
 
-  function addPOItem()       { setPOItems(items => [...items, { ingredient_id:"", qty:"", unit:"gr", unit_cost:"" }]) }
-  function removePOItem(i)   { setPOItems(items => items.filter((_,idx)=>idx!==i)) }
+  function addPOItem()        { setPOItems(items => [...items, { ingredient_id:"", qty:"", unit:"gr", unit_cost:"" }]) }
+  function removePOItem(i)    { setPOItems(items => items.filter((_,idx)=>idx!==i)) }
   function updatePOItem(i,k,v){
     setPOItems(items => items.map((x,idx) => {
       if (idx!==i) return x
       const updated = {...x,[k]:v}
       if (k==="ingredient_id") {
         const ing = ingredients.find(ing=>ing.id===v)
-        if (ing) {
-          updated.unit = ing.unit
-          updated.unit_cost = String(ing.cost_per_unit||0)
-        }
+        if (ing) { updated.unit = ing.unit; updated.unit_cost = String(ing.cost_per_unit||0) }
       }
       return updated
     }))
   }
 
-  // Get available units for an ingredient (base + conversions)
   function getUnits(ingId) {
     const ing = ingredients.find(i=>i.id===ingId)
     if (!ing) return UNITS
@@ -162,35 +212,41 @@ export default function InvPO() {
   async function markPaid(po) {
     if (!confirm(`Mark ${po.po_number} as paid? Stock and WAC costs will be updated automatically.`)) return
 
-    // Update each item — WAC calculation
+    // Reload fresh ingredient data before WAC calc
+    const { data: freshIngs } = await supabase.from("ingredients").select("*")
+    const ingMap = {}
+    for (const i of freshIngs||[]) ingMap[i.id] = i
+
     const updatedIngIds = []
+
     for (const item of po.po_items||[]) {
-      const ing = ingredients.find(i=>i.id===item.ingredient_id)
+      const ing = ingMap[item.ingredient_id]
       if (!ing) continue
 
-      // Convert to base unit
-      const qtyBase = toBaseUnit(ing, item.qty, item.unit)
-      const costPerBase = item.unit_cost / (item.qty > 0 ? (qtyBase / item.qty) : 1)
-      const totalCostForBatch = qtyBase * costPerBase
+      const qtyBase        = toBaseUnit(ing, parseFloat(item.qty), item.unit)
+      const ratePerPurchase = parseFloat(item.unit_cost) || 0
+      // cost per base unit = purchase cost / qty_in_base
+      const costPerBase    = qtyBase > 0 ? ratePerPurchase / (qtyBase / parseFloat(item.qty)) * parseFloat(item.qty) / qtyBase : 0
+      const totalCostBatch = qtyBase * costPerBase
 
-      // Recalculate WAC
-      const newWAC = await recalcWAC(ing, qtyBase, totalCostForBatch)
+      const newWAC = await recalcWAC(ing, qtyBase, totalCostBatch)
 
-      // Update last purchase info and conversion last_price
-      const updatedConvs = (ing.conversions||[]).map(c => {
-        if (c.unit === item.unit) return { ...c, last_price: item.unit_cost }
-        return c
-      })
-
+      // Update last purchase info + conversion last_price
+      const updatedConvs = (ing.conversions||[]).map(c =>
+        c.unit === item.unit ? { ...c, last_price: item.unit_cost } : c
+      )
       await supabase.from("ingredients").update({
         last_purchase_price: item.unit_cost,
         last_purchase_unit:  item.unit,
         conversions:         updatedConvs,
       }).eq("id", ing.id)
 
-      // Log movement
+      // Update local map so recalcWAC uses fresh stock for next item
+      ingMap[ing.id] = { ...ing, stock: (ing.stock||0) + qtyBase, cost_per_unit: newWAC }
+
+      // Log to stock_movements
       await supabase.from("stock_movements").insert({
-        id:"MOV-"+Date.now()+Math.random(),
+        id:"MOV-"+Date.now()+"-"+Math.random().toString(36).slice(2,6),
         type:"Purchase", ingredient_id:ing.id, ingredient_name:ing.name,
         qty:qtyBase, unit:ing.unit, ref:po.po_number,
         note:`Received: ${item.qty} ${item.unit} @ ${fmt(item.unit_cost)} → WAC: ${fmt(newWAC)}/${ing.unit}`,
@@ -201,18 +257,17 @@ export default function InvPO() {
       updatedIngIds.push(ing.id)
     }
 
-    // Mark PO as paid
     await supabase.from("purchase_orders").update({
       status:"Paid",
       payment_date:new Date().toISOString().slice(0,10)
     }).eq("id", po.id)
 
-    // Cascade recalculate recipes
+    // Full cascade: sub-recipes → dishes → product COGS
     if (updatedIngIds.length) await cascadeRecalc(updatedIngIds)
 
     await load()
     setModal(false)
-    alert(`✅ ${po.po_number} marked as paid. Stock updated with WAC calculation.`)
+    alert(`✅ ${po.po_number} paid. WAC updated → COGS recalculated.`)
   }
 
   async function voidPO(po) {
@@ -260,7 +315,7 @@ export default function InvPO() {
                       <div style={{ display:"flex", gap:4 }}>
                         <button onClick={()=>{setSelected(po);setModal(true)}} className="bo-btn bo-btn-ghost bo-btn-sm">View</button>
                         {po.status==="Unpaid" && <button onClick={()=>markPaid(po)} className="bo-btn bo-btn-sm" style={{ background:"var(--green-lt)", color:"var(--green)", border:"none", cursor:"pointer", borderRadius:"var(--r)", padding:"5px 11px", fontSize:12, fontWeight:600 }}>✓ Mark Paid</button>}
-                        {po.status!=="Void" && <button onClick={()=>voidPO(po)} className="bo-btn bo-btn-danger bo-btn-sm">Void</button>}
+                        {po.status!=="Void" && po.status!=="Paid" && <button onClick={()=>voidPO(po)} className="bo-btn bo-btn-danger bo-btn-sm">Void</button>}
                       </div>
                     </td>
                   </tr>
@@ -294,13 +349,12 @@ export default function InvPO() {
                   {(selected.po_items||[]).map((item,i) => {
                     const ing = ingredients.find(x=>x.id===item.ingredient_id)
                     const qtyBase = ing ? toBaseUnit(ing, item.qty, item.unit) : item.qty
-                    const costPerBase = item.unit_cost && item.qty ? item.unit_cost / item.qty : 0
                     return (
                       <tr key={i}>
                         <td>
                           <div>{item.name}</div>
                           {ing && item.unit !== ing.unit && (
-                            <div style={{ fontSize:10, color:"var(--ink5)" }}>{qtyBase.toFixed(1)} {ing.unit} @ {fmt(costPerBase)}/{ing.unit}</div>
+                            <div style={{ fontSize:10, color:"var(--ink5)" }}>= {qtyBase.toFixed(1)} {ing.unit}</div>
                           )}
                         </td>
                         <td>{item.qty}</td>
@@ -318,12 +372,12 @@ export default function InvPO() {
               </table>
               {selected.notes && <div style={{ marginTop:12, padding:10, background:"var(--surface)", borderRadius:"var(--r)", fontSize:13 }}>{selected.notes}</div>}
               <div style={{ marginTop:12, padding:"10px 14px", background:selected.status==="Paid"?"var(--green-lt)":"var(--amber-lt)", borderRadius:"var(--r)", fontSize:12, fontWeight:700, color:selected.status==="Paid"?"var(--green)":"var(--amber)" }}>
-                {selected.status==="Paid" ? `✅ Paid on ${selected.payment_date} — WAC updated` : "⏳ Payment pending"}
+                {selected.status==="Paid" ? `✅ Paid on ${selected.payment_date} — WAC + COGS updated` : "⏳ Payment pending"}
               </div>
             </div>
             <div className="bo-modal-footer">
               <button onClick={()=>setModal(false)} className="bo-btn bo-btn-ghost">Close</button>
-              {selected.status==="Unpaid" && <button onClick={()=>{markPaid(selected)}} className="bo-btn bo-btn-primary">✓ Mark as Paid & Update WAC</button>}
+              {selected.status==="Unpaid" && <button onClick={()=>markPaid(selected)} className="bo-btn bo-btn-primary">✓ Mark as Paid & Update WAC</button>}
             </div>
           </div>
         </div>
@@ -351,7 +405,6 @@ export default function InvPO() {
                 <div><label className="bo-label">Order Date</label><input type="date" value={poForm.order_date} onChange={e=>setPOForm(f=>({...f,order_date:e.target.value}))} className="bo-input" /></div>
                 <div><label className="bo-label">Due Date</label><input type="date" value={poForm.due_date} onChange={e=>setPOForm(f=>({...f,due_date:e.target.value}))} className="bo-input" /></div>
               </div>
-
               <div style={{ marginBottom:14 }}>
                 <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:10 }}>
                   <label className="bo-label" style={{ marginBottom:0 }}>Items *</label>
@@ -379,7 +432,6 @@ export default function InvPO() {
                   <span style={{ fontSize:18, fontWeight:900, color:"var(--brand)" }}>{fmt(grandTotal)}</span>
                 </div>
               </div>
-
               <div className="bo-form-row">
                 <label className="bo-label">Notes</label>
                 <textarea value={poForm.notes} onChange={e=>setPOForm(f=>({...f,notes:e.target.value}))} className="bo-input" rows={2} />
