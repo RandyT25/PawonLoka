@@ -136,19 +136,23 @@ export default function InvPO() {
 
   async function load() {
     setLoading(true)
-    const [{ data:p }, { data:i }, { data:s }, { data:items }] = await Promise.all([
+    const [{ data:p }, { data:i }, { data:s }] = await Promise.all([
       supabase.from("purchase_orders").select("*").order("created_at", { ascending:false }),
       supabase.from("ingredients").select("*"),
       supabase.from("suppliers").select("*").eq("active", true),
-      supabase.from("po_items").select("*"),
     ])
-    const itemsByPO = {}
-    for (const item of items||[]) {
-      if (!itemsByPO[item.po_id]) itemsByPO[item.po_id] = []
-      itemsByPO[item.po_id].push(item)
-    }
-    const posWithItems = (p||[]).map(po => ({ ...po, po_items: itemsByPO[po.id] || [] }))
-    setPOs(posWithItems); setIngredients(i||[]); setSuppliers(s||[])
+    // normalize: map DB camelCase → code snake_case + po_items from items column
+    const posNorm = (p||[]).map(po => ({
+      ...po,
+      po_number:   po.id,
+      supplier_id: po.supplierId,
+      supplier_name: po.supplierName,
+      invoice_no:  po.invoiceNo,
+      order_date:  po.date,
+      due_date:    po.dueDate,
+      po_items:    po.items || [],
+    }))
+    setPOs(posNorm); setIngredients(i||[]); setSuppliers(s||[])
     setLoading(false)
   }
 
@@ -188,26 +192,24 @@ export default function InvPO() {
     if (!validItems.length) { alert("Add at least one item"); return }
     setSaving(true)
     const poNum = "PO-" + String(pos.length+1).padStart(3,"0")
-    const { data:po } = await supabase.from("purchase_orders").insert({
-      id:"PO-"+Date.now(), po_number:poNum,
-      supplier_id:sup.id, supplier_name:sup.name,
-      invoice_no:poForm.invoice_no||poNum,
-      order_date:poForm.order_date, due_date:poForm.due_date||null,
-      notes:poForm.notes||null, status:"Unpaid", total:grandTotal
-    }).select().single()
-    if (po) {
-      const items = validItems.map(item => {
-        const ing = ingredients.find(i=>i.id===item.ingredient_id)
-        return {
-          id:"POI-"+Date.now()+Math.random(), po_id:po.id,
-          ingredient_id:item.ingredient_id, name:ing?.name||"",
-          qty:parseFloat(item.qty), unit:item.unit,
-          unit_cost:parseFloat(item.unit_cost)||0,
-          total_cost:(parseFloat(item.qty)||0)*(parseFloat(item.unit_cost)||0)
-        }
-      })
-      await supabase.from("po_items").insert(items)
-    }
+    const poItems_json = validItems.map(item => {
+      const ing = ingredients.find(i=>i.id===item.ingredient_id)
+      return {
+        ingredient_id:item.ingredient_id, name:ing?.name||"",
+        qty:parseFloat(item.qty), unit:item.unit,
+        unit_cost:parseFloat(item.unit_cost)||0,
+        total_cost:(parseFloat(item.qty)||0)*(parseFloat(item.unit_cost)||0)
+      }
+    })
+    await supabase.from("purchase_orders").insert({
+      id:"PO-"+Date.now(),
+      supplierId:sup.id, supplierName:sup.name,
+      invoiceNo:poForm.invoice_no||poNum,
+      date:poForm.order_date, dueDate:poForm.due_date||null,
+      notes:poForm.notes||null, status:"Unpaid",
+      subtotal:grandTotal, total:grandTotal,
+      items:poItems_json
+    })
     await load()
     setNewPO(false)
     setPOForm({ supplier_id:"", invoice_no:"", order_date:new Date().toISOString().slice(0,10), due_date:"", notes:"" })
@@ -265,7 +267,6 @@ export default function InvPO() {
 
     await supabase.from("purchase_orders").update({
       status:"Paid",
-      payment_date:new Date().toISOString().slice(0,10)
     }).eq("id", po.id)
 
     // Full cascade: sub-recipes → dishes → product COGS
@@ -378,7 +379,7 @@ export default function InvPO() {
               </table>
               {selected.notes && <div style={{ marginTop:12, padding:10, background:"var(--surface)", borderRadius:"var(--r)", fontSize:13 }}>{selected.notes}</div>}
               <div style={{ marginTop:12, padding:"10px 14px", background:selected.status==="Paid"?"var(--green-lt)":"var(--amber-lt)", borderRadius:"var(--r)", fontSize:12, fontWeight:700, color:selected.status==="Paid"?"var(--green)":"var(--amber)" }}>
-                {selected.status==="Paid" ? `✅ Paid on ${selected.payment_date} — WAC + COGS updated` : "⏳ Payment pending"}
+                {selected.status==="Paid" ? `✅ Paid — WAC + COGS updated` : "⏳ Payment pending"}
               </div>
             </div>
             <div className="bo-modal-footer">
