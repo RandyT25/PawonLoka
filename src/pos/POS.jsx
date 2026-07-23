@@ -6,6 +6,8 @@ import useOrders from './hooks/useOrders'
 import useOfflineSync from './hooks/useOfflineSync'
 import { offlineStore, offlineFullSync } from '../lib/offlineStore'
 import { qr } from '../lib/quickRead'
+import { dbWrite } from '../shared/dbWrite'
+import { computeOrderTotals } from '../shared/orderPricing'
 
 // Convert a qty expressed in `unit` into the ingredient's own base/stock unit
 function toBaseUnit(ing, qty, unit) {
@@ -16,41 +18,6 @@ function toBaseUnit(ing, qty, unit) {
   if (ing.unit==='gr' && fallbacks[unit]) return qty * fallbacks[unit]
   if (ing.unit==='ml' && fallbacks[unit]) return qty * fallbacks[unit]
   return qty
-}
-
-// Offline-safe write: always queues on any network failure, 5s hard timeout
-async function dbWrite(table, op, payload, match = null) {
-  function isNetworkError(e) {
-    if (!navigator.onLine) return true
-    const msg = (e?.message || '').toLowerCase()
-    return msg.includes('timeout') || msg.includes('fetch') || msg.includes('network') || msg.includes('failed to fetch') || msg.includes('connection')
-  }
-
-  // Fast path: definitely offline
-  if (!navigator.onLine) {
-    await offlineStore.enqueue({ table, op, payload, match })
-    window.dispatchEvent(new Event('offline-queue-updated'))
-    return true
-  }
-
-  try {
-    // Hard 5s timeout — if no internet (WiFi with no data), never hang
-    const timer = new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 5000))
-    let q = supabase.from(table)[op](payload)
-    if (match) Object.entries(match).forEach(([k, v]) => { q = q.eq(k, v) })
-    const { error } = await Promise.race([q, timer])
-    if (error) throw error
-    return true
-  } catch(e) {
-    if (isNetworkError(e)) {
-      // No real internet — queue for later sync
-      await offlineStore.enqueue({ table, op, payload, match })
-      window.dispatchEvent(new Event('offline-queue-updated'))
-      return true
-    }
-    console.error('[dbWrite]', table, op, e?.message || e)
-    return false // real DB error (column missing, RLS, etc.)
-  }
 }
 import PinLogin from './components/PinLogin'
 import MenuGrid from './components/MenuGrid'
@@ -908,12 +875,10 @@ export default function POS() {
         if (tableNo) { let q = supabase.from('tables').update({ status:'Available', open_bill_id:null }).eq('name', tableNo); if (tableArea) q = q.eq('area', tableArea); await q }
         setOpenBillId(null); setTableNo(''); setTableArea(''); setPax(0); setCustomer(null); setDiscount(0)
       } else {
-        const sub = newCart.reduce((a,i) => a + i.price*i.qty, 0)
-        const discA = discount ? Math.round(sub*discount/100) : 0
-        const tx = Math.round((sub-discA)*TAX_RATE_LIVE)
+        const mapped = newCart.map(i => ({ sku:i.sku||'', name:i.name, qty:i.qty, price:i.price, modifiers:i.modifiers||{}, note:i.note||'', cat:i.cat||'', _sent:i._sent||false, _station:i._station||'', isBundle:i.isBundle||false, bundleItems:i.bundleItems||null, itemDisc:i.itemDisc||0, itemDiscLabel:i.itemDiscLabel||'' }))
+        const totals = computeOrderTotals({ items: mapped, discountPct: discount, taxRate: TAX_RATE_LIVE })
         await supabase.from('orders').update({
-          items: newCart.map(i => ({ sku:i.sku||'', name:i.name, qty:i.qty, price:i.price, modifiers:i.modifiers||{}, note:i.note||'', cat:i.cat||'', _sent:i._sent||false, _station:i._station||'', isBundle:i.isBundle||false, bundleItems:i.bundleItems||null })),
-          subtotal: sub, tax: tx, total: sub-discA+tx,
+          ...totals,
           notes: (item.notes||'') + ' | REMOVE: ' + item.name + ' - ' + reason
         }).eq('id', openBillId)
       }
@@ -940,12 +905,10 @@ export default function POS() {
         if (tableNo) { let q = supabase.from('tables').update({ status:'Available', open_bill_id:null }).eq('name', tableNo); if (tableArea) q = q.eq('area', tableArea); await q }
         setOpenBillId(null); setTableNo(''); setTableArea(''); setPax(0); setCustomer(null); setDiscount(0)
       } else {
-        const sub = newCart.reduce((a,i) => a + i.price*i.qty, 0)
-        const discA = discount ? Math.round(sub*discount/100) : 0
-        const tx = Math.round((sub-discA)*TAX_RATE_LIVE)
+        const mapped = newCart.map(i => ({ sku:i.sku||'', name:i.name, qty:i.qty, price:i.price, modifiers:i.modifiers||{}, note:i.note||'', cat:i.cat||'', _sent:i._sent||false, _station:i._station||'', isBundle:i.isBundle||false, bundleItems:i.bundleItems||null, itemDisc:i.itemDisc||0, itemDiscLabel:i.itemDiscLabel||'' }))
+        const totals = computeOrderTotals({ items: mapped, discountPct: discount, taxRate: TAX_RATE_LIVE })
         await supabase.from('orders').update({
-          items: newCart.map(i => ({ sku:i.sku||'', name:i.name, qty:i.qty, price:i.price, modifiers:i.modifiers||{}, note:i.note||'', cat:i.cat||'', _sent:i._sent||false, _station:i._station||'', isBundle:i.isBundle||false, bundleItems:i.bundleItems||null })),
-          subtotal: sub, tax: tx, total: sub-discA+tx,
+          ...totals,
           notes: (item.notes||'') + ' | REDUCE: ' + item.name + ' -' + delta + ' - ' + reason
         }).eq('id', openBillId)
       }
@@ -953,7 +916,6 @@ export default function POS() {
   }
 
   async function handleCharge({ payMethod, cashGiven, usePoints, finalTotal, splitLabel, splitItems, orderNote, promoDisc = 0, promoName, multiPay }) {
-    const discAmt = discount ? Math.round(subtotal * discount / 100) : 0
     const orderCogs = cart.reduce((sum, item) => {
       const prod = products.find(p => p.sku === item.sku)
       return sum + (prod?.cogs || 0) * (item.qty || 1)
@@ -962,8 +924,10 @@ export default function POS() {
     // SPLIT — record partial payment
     if (splitLabel) {
       const now = new Date()
+      const mappedItems = cart.map(i => ({ sku:i.sku||'', name:i.name, qty:i.qty, price:i.price, modifiers:i.modifiers||{}, note:i.note||'', cat:i.cat||'', itemDisc:i.itemDisc||0, itemDiscLabel:i.itemDiscLabel||'' }))
+      const totals = computeOrderTotals({ items: mappedItems, discountPct: discount, promoDisc, pointsValue: (usePoints||0)*100, taxRate: TAX_RATE_LIVE })
+      const billTotal = totals.total
       const newSplitPaid = splitPaid + finalTotal
-      const billTotal = subtotal + Math.round(subtotal * TAX_RATE_LIVE) - discAmt
       const isFullyPaid = newSplitPaid >= billTotal
 
       if (openBillId) {
@@ -975,9 +939,10 @@ export default function POS() {
 
         const saved = isFullyPaid
           ? await dbWrite('orders', 'update', {
-              status: 'Paid', pay: 'Split', notes: newNote, total: billTotal,
+              status: 'Paid', pay: 'Split', notes: newNote,
+              subtotal: totals.subtotal, tax: totals.tax, discount: totals.discount, total: billTotal,
               payments: newPayments, cogs: orderCogs, customer_id: customer?.id || null,
-              items: cart.map(i => ({ sku:i.sku||'', name:i.name, qty:i.qty, price:i.price, modifiers:i.modifiers||{}, note:i.note||'', cat:i.cat||'', itemDisc:i.itemDisc||0, itemDiscLabel:i.itemDiscLabel||'' })),
+              items: mappedItems,
             }, { id: openBillId })
           : await dbWrite('orders', 'update', { notes: newNote, payments: newPayments }, { id: openBillId })
 
@@ -1007,7 +972,7 @@ export default function POS() {
         time: now.toLocaleTimeString('id-ID',{hour:'2-digit',minute:'2-digit'}),
         staff: staff.name, customer: customer?.name || null,
         items: splitItems || cart,
-        subtotal, tax: Math.round(subtotal*TAX_RATE_LIVE), discount: discAmt,
+        subtotal: totals.subtotal, tax: totals.tax, discount: totals.discount,
         payments: [{ method: payMethod, amount: finalTotal }],
         _isSplit: !isFullyPaid, splitLabel, splitPaid: newSplitPaid,
         _fullyPaid: isFullyPaid,
@@ -1018,15 +983,17 @@ export default function POS() {
     // FULL PAYMENT — if open bill exists, update it to Paid instead of creating new
     if (openBillId) {
       const now = new Date()
+      const mappedItems = cart.map(i => ({ sku:i.sku||'', name:i.name, qty:i.qty, price:i.price, modifiers:i.modifiers||{}, note:i.note||'', cat:i.cat||'', itemDisc:i.itemDisc||0, itemDiscLabel:i.itemDiscLabel||'' }))
+      const totals = computeOrderTotals({ items: mappedItems, discountPct: discount, promoDisc, pointsValue: (usePoints||0)*100, taxRate: TAX_RATE_LIVE })
       await dbWrite('orders', 'update', {
         status: 'Paid', pay: payMethod,
         cash_given: payMethod === 'Cash' ? parseInt(cashGiven) : null,
         change: payMethod === 'Cash' ? (parseInt(cashGiven)||0) - finalTotal : null,
-        total: finalTotal, discount: discAmt + promoDisc,
+        subtotal: totals.subtotal, tax: totals.tax, discount: totals.discount, total: finalTotal,
         notes: orderNote || null, promo: promoName || null,
         time: now.toLocaleTimeString('id-ID',{hour:'2-digit',minute:'2-digit'}),
         cogs: orderCogs, customer_id: customer?.id || null,
-        items: cart.map(i => ({ sku:i.sku||'', name:i.name, qty:i.qty, price:i.price, modifiers:i.modifiers||{}, note:i.note||'', cat:i.cat||'', itemDisc:i.itemDisc||0, itemDiscLabel:i.itemDiscLabel||'' })),
+        items: mappedItems,
       }, { id: openBillId })
 
       // Update customer points (queued if offline — they get their points when synced)
@@ -1054,7 +1021,7 @@ export default function POS() {
         cashier: staff.name, staff: staff.name,
         table: tableNo || null,
         customer: customer?.name || null, items: cart,
-        subtotal, tax: Math.round(subtotal*TAX_RATE_LIVE), discount: discAmt + promoDisc,
+        subtotal: totals.subtotal, tax: totals.tax, discount: totals.discount,
         payments: [{ method: payMethod, amount: finalTotal }],
       }
       clearCart(); setCustomer(null); setTableNo(''); setTableArea(''); setPax(0); setDiscount(0)
@@ -1066,11 +1033,13 @@ export default function POS() {
     // NO OPEN BILL — create and immediately close a new order
     const now2 = new Date()
     const newOrderId = 'ORD-' + Date.now()
+    const noBillItems = cart.map(i => ({ sku:i.sku||'', name:i.name, qty:i.qty, price:i.price, modifiers:i.modifiers||{}, note:i.note||'', cat:i.cat||'', itemDisc:i.itemDisc||0, itemDiscLabel:i.itemDiscLabel||'' }))
+    const noBillTotals = computeOrderTotals({ items: noBillItems, discountPct: discount, promoDisc, pointsValue: (usePoints||0)*100, taxRate: TAX_RATE_LIVE })
     const newOrder = {
       id: newOrderId,
-      items: cart.map(i => ({ sku:i.sku||'', name:i.name, qty:i.qty, price:i.price, modifiers:i.modifiers||{}, note:i.note||'', cat:i.cat||'', itemDisc:i.itemDisc||0, itemDiscLabel:i.itemDiscLabel||'' })),
-      subtotal, tax: Math.round(subtotal * TAX_RATE_LIVE),
-      discount: discAmt + promoDisc, total: finalTotal,
+      items: noBillItems,
+      subtotal: noBillTotals.subtotal, tax: noBillTotals.tax,
+      discount: noBillTotals.discount, total: finalTotal,
       pay: payMethod, staff: staff.name,
       table: tableNo || null, table_area: tableArea || null,
       customer: customer?.name || null, customer_id: customer?.id || null,

@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { supabase } from '../lib/supabase'
 import { fmt, KITCHEN_STATIONS } from '../shared/constants'
+import { computeOrderTotals, impliedDiscountPct } from '../shared/orderPricing'
 import './customer.css'
 
 // ── SVG Icons ────────────────────────────────────────────────────────────────
@@ -247,13 +248,11 @@ export default function CustomerApp({ tableId }) {
       let orderId = openOrder?.id
 
       if (openOrder) {
-        const merged  = [...(openOrder.items || []), ...orderItems]
-        const newSub  = merged.reduce((s, i) => s + i.price * i.qty, 0)
-        const newTax  = Math.round(newSub * taxRate)
-        await supabase.from('orders').update({
-          items: merged, subtotal: newSub, tax: newTax, total: newSub + newTax,
-        }).eq('id', openOrder.id)
-        setOpenOrder(prev => ({ ...prev, items: merged, subtotal: newSub, total: newSub + newTax }))
+        const merged = [...(openOrder.items || []), ...orderItems]
+        // Preserve whatever discount rate was already applied to this bill (e.g. by staff via POS)
+        const totals = computeOrderTotals({ items: merged, discountPct: impliedDiscountPct(openOrder), taxRate })
+        await supabase.from('orders').update(totals).eq('id', openOrder.id)
+        setOpenOrder(prev => ({ ...prev, ...totals }))
       } else {
         orderId = 'ORD-' + Date.now()
         const { error: e } = await supabase.from('orders').insert({

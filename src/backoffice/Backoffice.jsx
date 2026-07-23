@@ -36,6 +36,7 @@ const KitchenDisplay         = lazy(() => import("./components/KitchenDisplay"))
 const Hardware        = lazy(() => import("./components/Hardware"))
 const UsersAccess     = lazy(() => import("./components/UsersAccess"))
 const AuditLog        = lazy(() => import("./components/AuditLog"))
+const OrderAnomalies  = lazy(() => import("./components/OrderAnomalies"))
 const Integrations    = lazy(() => import("./components/Integrations"))
 const Inventory       = lazy(() => import("./components/Inventory"))
 const StaffSubmissions= lazy(() => import("./components/StaffSubmissions"))
@@ -214,6 +215,7 @@ const NAV = [
   { id:"hardware" },
   { id:"users-access",      label:"Users & Access" },
   { id:"audit-log",         label:"Audit Log" },
+  { id:"order-anomalies",   label:"Order Anomalies" },
   { id:"integrations" },
 ]
 
@@ -244,7 +246,7 @@ const NAV_LABELS = {
   "receipt-designer": "Receipt Designer",
   "kitchen-ticket-designer": "Kitchen Ticket Designer",
   hardware: "Hardware", "users-access": "Users & Access",
-  "audit-log": "Audit Log", integrations: "Integrations",
+  "audit-log": "Audit Log", "order-anomalies": "Order Anomalies", integrations: "Integrations",
 }
 
 const SCREENS = {
@@ -299,6 +301,7 @@ const SCREENS = {
   hardware:          Hardware,
   "users-access":    UsersAccess,
   "audit-log":       AuditLog,
+  "order-anomalies": OrderAnomalies,
   integrations:      Integrations,
 }
 

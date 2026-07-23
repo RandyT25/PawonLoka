@@ -58,6 +58,8 @@ export default function VoidModal({ onClose, managerPin = '9999' }) {
     const newStatus = refundType === 'full' ? 'Voided' : 'Refunded'
     const { error: err } = await supabase.from('orders').update({
       status: newStatus,
+      total: selected.total - amount,
+      refund_amount: (selected.refund_amount || 0) + amount,
       notes: (selected.notes || '') + ' | ' + newStatus.toUpperCase() + ': Rp' + amount + ' - ' + reason
     }).eq('id', selected.id)
 

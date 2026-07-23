@@ -80,7 +80,7 @@ export default function Orders() {
   }
 
   const filtered = orders.filter(o => {
-    const matchStatus = statusFilter === "all" || o.status === statusFilter
+    const matchStatus = statusFilter === "all" || o.status?.toLowerCase() === statusFilter
     const matchSearch = !search ||
       o.id?.toLowerCase().includes(search.toLowerCase()) ||
       o.staff?.toLowerCase().includes(search.toLowerCase()) ||
@@ -89,7 +89,7 @@ export default function Orders() {
     return matchStatus && matchSearch
   })
 
-  const paidOrders   = filtered.filter(o => o.status === "paid")
+  const paidOrders   = filtered.filter(o => o.status?.toLowerCase() === "paid")
   const totalRevenue = paidOrders.reduce((s,o) => s + (o.total||0), 0)
   const totalOrders  = paidOrders.length
   const avgOrder     = totalOrders ? totalRevenue / totalOrders : 0
@@ -186,7 +186,7 @@ export default function Orders() {
             ) : filtered.length === 0 ? (
               <tr><td colSpan={9} style={{ textAlign:"center", padding:40, color:"var(--ink4)" }}>No orders found</td></tr>
             ) : filtered.map(o => {
-              const sc   = STATUS_COLORS[o.status] || STATUS_COLORS.open
+              const sc   = STATUS_COLORS[o.status?.toLowerCase()] || STATUS_COLORS.open
               const time = o.created_at ? new Date(o.created_at).toLocaleTimeString("id-ID",{hour:"2-digit",minute:"2-digit"}) : "-"
               return (
                 <tr key={o.id} onClick={()=>setSelected(o)}
@@ -311,10 +311,10 @@ export default function Orders() {
             </div>
             <div className="bo-modal-footer">
               <button onClick={()=>setSelected(null)} className="bo-btn bo-btn-ghost">Close</button>
-              {selected.status === "paid" && (
+              {selected.status?.toLowerCase() === "paid" && (
                 <button onClick={()=>sendWA(selected)} className="bo-btn bo-btn-primary">WA Receipt</button>
               )}
-              {selected.status === "paid" && (
+              {selected.status?.toLowerCase() === "paid" && (
                 <button onClick={()=>{ setVoidModal(selected); setVoidReason(""); setVoidNote("") }}
                   className="bo-btn bo-btn-danger">Void Order</button>
               )}

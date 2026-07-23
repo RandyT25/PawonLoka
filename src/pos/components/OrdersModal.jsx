@@ -41,11 +41,6 @@ export default function OrdersModal({ onClose, onRecall, onPrintKitchen }) {
     setLoading(false)
   }
 
-  async function markPaid(order) {
-    await supabase.from('orders').update({ status: 'Paid' }).eq('id', order.id)
-    load()
-  }
-
   async function handleResendWA(order) {
     if (!order.customer_id) { alert('No customer linked to this order'); return }
     setWaSending(order.id)
@@ -230,5 +225,4 @@ const S = {
   tabActive: { background:'#0A1628', borderColor:'#0A1628', color:'white' },
   orderCard: { border:'1px solid #E2E8F0', borderRadius:12, padding:14, marginBottom:10 },
   recallBtn: { flex:1, padding:'8px 12px', background:'#EFF6FF', color:'#2563EB', border:'none', borderRadius:8, fontSize:12, fontWeight:700, cursor:'pointer' },
-  paidBtn:   { flex:1, padding:'8px 12px', background:'#F0FDF4', color:'#16A34A', border:'none', borderRadius:8, fontSize:12, fontWeight:700, cursor:'pointer' },
 }

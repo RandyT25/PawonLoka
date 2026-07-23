@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import { supabase } from '../../lib/supabase'
 import { offlineStore } from '../../lib/offlineStore'
 import { qr } from '../../lib/quickRead'
+import { computeOrderTotals, impliedDiscountPct } from '../../shared/orderPricing'
 
 export default function FloorPlan({ staff, onSelectTable, onTakeaway, onDelivery, onBack, appSettings }) {
   const [tables,    setTables]    = useState([])
@@ -93,8 +94,10 @@ export default function FloorPlan({ staff, onSelectTable, onTakeaway, onDelivery
     if (srcOrder) {
       if (tgtOrder) {
         const allItems = [...(tgtOrder.items||[]), ...(srcOrder.items||[])]
-        const newSubtotal = allItems.reduce((s,i)=>s+(i.price*i.qty),0)
-        await supabase.from('orders').update({ items:allItems, subtotal:newSubtotal, total:newSubtotal }).eq('id',tgtOrder.id)
+        // Merged bill keeps the target table's own discount rate, reapplied to the combined subtotal
+        const taxRate = appSettings?.payments?.tax?.enabled ? (appSettings.payments.tax.rate||0)/100 : 0
+        const totals = computeOrderTotals({ items: allItems, discountPct: impliedDiscountPct(tgtOrder), taxRate })
+        await supabase.from('orders').update(totals).eq('id',tgtOrder.id)
         await supabase.from('orders').update({ status:'Voided', table: targetTable.name, table_area: targetTable.area||null }).eq('id',srcOrder.id)
       } else {
         await supabase.from('orders').update({ table: targetTable.name, table_area: targetTable.area||null }).eq('id',srcOrder.id)
@@ -103,7 +106,10 @@ export default function FloorPlan({ staff, onSelectTable, onTakeaway, onDelivery
     await supabase.from('tables').update({ status:'Available', merged_with:null }).eq('id',src.id)
     await supabase.from('tables').update({ merged_with: src.name }).eq('id',targetTable.id)
     setMergeMode(null); await load()
-    alert(src.name + " merged into " + targetTable.name)
+    const droppedDiscountWarning = srcOrder?.discount > 0 && tgtOrder
+      ? '\n\nCatatan: diskon pada ' + src.name + ' tidak ikut dipindahkan — hanya diskon ' + targetTable.name + ' yang dipakai.'
+      : ''
+    alert(src.name + " merged into " + targetTable.name + droppedDiscountWarning)
   }
 
   async function handleMove(targetTable) {
