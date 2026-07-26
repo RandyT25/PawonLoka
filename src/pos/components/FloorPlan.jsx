@@ -109,6 +109,7 @@ export default function FloorPlan({ staff, onSelectTable, onTakeaway, onDelivery
     }
     await dbWrite('tables', 'update', { status:'Available', merged_with:null }, { id: src.id })
     await dbWrite('tables', 'update', { merged_with: src.name }, { id: targetTable.id })
+    offlineStore.setCache('orders_modal_open', null)
     setMergeMode(null); await load()
     const droppedDiscountWarning = srcOrder?.discount > 0 && tgtOrder
       ? '\n\nCatatan: diskon pada ' + src.name + ' tidak ikut dipindahkan — hanya diskon ' + targetTable.name + ' yang dipakai.'
@@ -125,6 +126,7 @@ export default function FloorPlan({ staff, onSelectTable, onTakeaway, onDelivery
       await dbWrite('orders', 'update', { table: targetTable.name, table_area: targetTable.area||null }, { id: src.open_bill_id })
     }
     await dbWrite('tables', 'update', { status:'Available' }, { id: src.id })
+    offlineStore.setCache('orders_modal_open', null)
     setMoveMode(null); await load()
     alert("Moved to " + targetTable.name)
   }

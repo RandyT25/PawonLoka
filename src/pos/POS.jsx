@@ -282,12 +282,32 @@ export default function POS() {
     return () => { clearTimeout(debounceTimer); supabase.removeChannel(ch) }
   }, [])
 
+  // Live order sync — the floor plan's occupancy cache is per-device (IndexedDB), so
+  // voiding/paying/opening a bill from a *different* device (backoffice, another POS
+  // terminal) never invalidated it locally. Without this, a table could keep showing
+  // as occupied by an order that was already removed elsewhere, until whatever staff
+  // did next on this device happened to clear the cache — this keeps every session's
+  // occupancy cache honest regardless of which device changed the order.
+  useEffect(() => {
+    const ch = supabase.channel('pos_orders_sync')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'orders' }, () => invalidateFloorPlanCache())
+      .subscribe()
+    return () => { supabase.removeChannel(ch) }
+  }, [])
+
   async function restoreShift() {
     const today = new Date().toISOString().slice(0, 10)
     // Close any stale open shifts from previous days (all staff)
     await supabase.from('shifts')
       .update({ clock_out: 'auto-closed' })
       .is('clock_out', null)
+      .neq('date', today)
+    // Void any bills left open from previous days — the floor plan only checks
+    // today's orders, so a never-closed bill would otherwise sit invisible
+    // forever instead of freeing up its table for new orders.
+    await supabase.from('orders')
+      .update({ status: 'void', void_reason: 'Auto-voided: stale open bill from a previous day, never closed', voided_by: 'System' })
+      .eq('status', 'Open')
       .neq('date', today)
     // Find the single active shift for today (shared across all staff)
     const { data } = await supabase
@@ -481,6 +501,15 @@ export default function POS() {
     offlineStore.setCache('orders_today', updated)
   }
 
+  // FloorPlan reads table occupancy via a cache-first query keyed on 'orders_modal_open' — the
+  // cache never expires on its own, so once a bill opens or closes on a table, the floor plan
+  // would keep showing the table's old state (letting staff re-open an already-open bill and
+  // create a duplicate) until something happens to invalidate it. Call this any time an order's
+  // open/paid/voided status changes so the next floor plan visit is forced to fetch fresh.
+  function invalidateFloorPlanCache() {
+    offlineStore.setCache('orders_modal_open', null)
+  }
+
   async function recallFromOrder(order) {
     // Auto-cache every order recalled — makes it available for offline access
     updateOrderCache(order)
@@ -647,6 +676,7 @@ export default function POS() {
       const ok = await dbWrite('orders', 'insert', order)
       if (!ok) { alert('Gagal simpan order'); return }
       updateOrderCache(order)
+      invalidateFloorPlanCache()
       setOpenBillId(orderId)
     }
 
@@ -884,6 +914,7 @@ export default function POS() {
         // Last item removed — delete the empty order and reset POS
         await dbWrite('orders', 'delete', null, { id: openBillId })
         if (tableNo) await dbWrite('tables', 'update', { status:'Available', open_bill_id:null }, tableArea ? { name: tableNo, area: tableArea } : { name: tableNo })
+        invalidateFloorPlanCache()
         setOpenBillId(null); setTableNo(''); setTableArea(''); setPax(0); setCustomer(null); setDiscount(0)
       } else {
         const mapped = newCart.map(i => ({ sku:i.sku||'', name:i.name, qty:i.qty, price:i.price, modifiers:i.modifiers||{}, note:i.note||'', cat:i.cat||'', _sent:i._sent||false, _station:i._station||'', isBundle:i.isBundle||false, bundleItems:i.bundleItems||null, itemDisc:i.itemDisc||0, itemDiscLabel:i.itemDiscLabel||'' }))
@@ -914,6 +945,7 @@ export default function POS() {
         // Cart is now empty — delete the order and reset POS
         await dbWrite('orders', 'delete', null, { id: openBillId })
         if (tableNo) await dbWrite('tables', 'update', { status:'Available', open_bill_id:null }, tableArea ? { name: tableNo, area: tableArea } : { name: tableNo })
+        invalidateFloorPlanCache()
         setOpenBillId(null); setTableNo(''); setTableArea(''); setPax(0); setCustomer(null); setDiscount(0)
       } else {
         const mapped = newCart.map(i => ({ sku:i.sku||'', name:i.name, qty:i.qty, price:i.price, modifiers:i.modifiers||{}, note:i.note||'', cat:i.cat||'', _sent:i._sent||false, _station:i._station||'', isBundle:i.isBundle||false, bundleItems:i.bundleItems||null, itemDisc:i.itemDisc||0, itemDiscLabel:i.itemDiscLabel||'' }))
@@ -989,6 +1021,7 @@ export default function POS() {
               : null,
             deductStock(cart),
           ])
+          invalidateFloorPlanCache()
         }
       }
 
@@ -1046,6 +1079,7 @@ export default function POS() {
           : null,
         deductStock(cart),
       ])
+      invalidateFloorPlanCache()
 
       const fakeOrder = {
         id: openBillId, total: finalTotal, pay: payMethod,

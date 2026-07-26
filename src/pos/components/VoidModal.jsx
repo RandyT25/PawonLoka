@@ -3,6 +3,7 @@ import { supabase } from '../../lib/supabase'
 import { fmt } from '../../shared/constants'
 import { qr } from '../../lib/quickRead'
 import { dbWrite } from '../../shared/dbWrite'
+import { offlineStore } from '../../lib/offlineStore'
 
 export default function VoidModal({ onClose, managerPin = '9999' }) {
   const [step, setStep] = useState('search')
@@ -65,6 +66,10 @@ export default function VoidModal({ onClose, managerPin = '9999' }) {
     }, { id: selected.id })
 
     if (!saved) { setError('Gagal — cek koneksi dan coba lagi'); setLoading(false); return }
+
+    // Voiding/refunding a still-Open bill frees up its table — the floor plan's occupancy
+    // cache needs invalidating or it'll keep showing the table as occupied by this order.
+    offlineStore.setCache('orders_modal_open', null)
 
     // Log refund as cash out if cash payment
     if (selected.pay === 'Cash' || refundType === 'partial') {
