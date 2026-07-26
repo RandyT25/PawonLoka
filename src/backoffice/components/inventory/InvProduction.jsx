@@ -77,7 +77,7 @@ export default function InvProduction() {
       if (!lines.length) { alert("Resep tidak memiliki bahan. Tambahkan bahan di Recipe Editor."); return }
       ingredients_used = lines.map(l => {
         const ing = ingredients.find(i=>i.id===l.ingredient_id)
-        return { ingredient_id:l.ingredient_id, name:ing?.name||"", qty:l.qty*batchQty, unit:l.unit||ing?.unit||"" }
+        return { ingredient_id:l.ingredient_id, name:ing?.name||"", qty:Math.round(l.qty*batchQty*100)/100, unit:l.unit||ing?.unit||"" }
       })
     } else {
       const validItems = usedItems.filter(i=>i.ingredient_id&&parseFloat(i.qty)>0)
