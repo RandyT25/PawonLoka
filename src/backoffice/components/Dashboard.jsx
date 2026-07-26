@@ -85,7 +85,7 @@ export default function Dashboard({ onNavChange }) {
     setHourData(hourArr)
     setPayments(payArr)
     setTopProds(topArr.map(t=>({...t,max:maxQty})))
-    setRecent(orders.slice(0, 20))
+    setRecent(orders)
     setLastUpdated(new Date())
     setLoading(false)
   }, [range, customDate, customDateTo])
@@ -320,7 +320,10 @@ export default function Dashboard({ onNavChange }) {
         <div className="bo-card-title">
           Transaksi Terbaru
           <span style={{ fontSize:11, color:"var(--ink5)", fontWeight:400, marginLeft:8 }}>
-            {stats.paidOrders} lunas · {stats.openOrders} open · lihat semua di halaman Orders
+            {stats.paidOrders} lunas · {stats.openOrders} open ·{" "}
+            {onNavChange
+              ? <button onClick={()=>onNavChange("orders")} style={{ fontSize:11, fontWeight:400, color:"var(--brand)", background:"none", border:"none", cursor:"pointer", padding:0, textDecoration:"underline" }}>lihat semua di halaman Orders</button>
+              : "lihat semua di halaman Orders"}
           </span>
         </div>
         {selected && (

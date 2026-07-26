@@ -1096,7 +1096,7 @@ function useOwnerData(range, customDate, customDateTo) {
     const cashLog=[
       ...paid.map(o=>({id:"i"+o.id,created_at:o.created_at,type:"income",note:o.code||"Penjualan",pay:o.pay,amount:o.total||0})),
       ...expPeriod.map(e=>({id:"e"+e.id,created_at:e.created_at,type:"expense",note:e.note||"Pengeluaran",category:e.category||"Lain-lain",amount:e.amount||0}))
-    ].sort((a,b)=>new Date(b.created_at)-new Date(a.created_at)).slice(0,30)
+    ].sort((a,b)=>new Date(b.created_at)-new Date(a.created_at))
 
     setStats({sales,unpaid,cogs,orders:period.length,paidOrders:paid.length,openOrders:open.length,customers,avgOrder,grossProfit:sales-cogs,prevSales:0,totalSold,avgItems,mtd,projection:proyeksiBulanIni})
     setPayments(payArr)
@@ -1104,7 +1104,7 @@ function useOwnerData(range, customDate, customDateTo) {
     setTopDrinkItems(drinkArr)
     setSlowItems(slowArr)
     setHourData(hourArr)
-    setRecent(period.slice(0,30))
+    setRecent(period)
     setStaffData(staffArr)
     setCashData({income:sales,expenses:totalExp,incomeCount:paid.length,byMethod:payArr,expenseItems:expPeriod.map(e=>({...e,note:e.note||"Pengeluaran",category:e.category||"Lain-lain"})),log:cashLog})
     setLastUpdated(new Date())

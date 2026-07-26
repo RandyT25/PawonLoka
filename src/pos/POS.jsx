@@ -494,6 +494,11 @@ export default function POS() {
     setTableArea(order.table_area || '')
     setPax(order.pax || 0)
     setOpenBillId(order.id)
+    // Restore how much of this bill has already been paid via split payments, so the
+    // Charge modal's "remaining owed" display stays accurate across a reload/table-switch
+    // mid-split. handleCharge's own completion check is independently derived from the DB
+    // on every split regardless — this just keeps the UI hint in sync with that.
+    setSplitPaid((order.payments || []).reduce((s, p) => s + (Number(p.amount) || 0), 0))
     if (order.customer_id) {
       const { data: cust } = await supabase.from('customers').select('*').eq('id', order.customer_id).maybeSingle()
       setCustomer(cust || (order.customer ? { name: order.customer, id: order.customer_id } : null))
@@ -932,21 +937,37 @@ export default function POS() {
       const now = new Date()
       const mappedItems = cart.map(i => ({ sku:i.sku||'', name:i.name, qty:i.qty, price:i.price, modifiers:i.modifiers||{}, note:i.note||'', cat:i.cat||'', itemDisc:i.itemDisc||0, itemDiscLabel:i.itemDiscLabel||'' }))
       const totals = computeOrderTotals({ items: mappedItems, discountPct: discount, promoDisc, pointsValue: (usePoints||0)*100, taxRate: TAX_RATE_LIVE })
-      const billTotal = totals.total
-      const newSplitPaid = splitPaid + finalTotal
-      const isFullyPaid = newSplitPaid >= billTotal
+      let billTotal = totals.total
+      let prevNotes = ''
+      let prevPayments = []
+      let existing = null
 
       if (openBillId) {
-        const { data: existing } = await supabase.from('orders').select('notes,payments').eq('id', openBillId).maybeSingle()
-        const prevNotes = existing?.notes || ''
-        const prevPayments = existing?.payments || []
-        const newNote = (prevNotes ? prevNotes + ' | ' : '') + 'SPLIT: ' + payMethod + ' Rp' + finalTotal
-        const newPayments = [...prevPayments, { method: payMethod, amount: finalTotal, time: now.toLocaleTimeString('id-ID',{hour:'2-digit',minute:'2-digit'}) }]
+        const { data } = await supabase.from('orders').select('notes,payments,total,subtotal,tax,discount').eq('id', openBillId).maybeSingle()
+        existing = data
+        prevNotes = existing?.notes || ''
+        prevPayments = existing?.payments || []
+        // Trust the order's own stored total — it's kept in sync with the cart on every
+        // change (see the dbWrite a few dozen lines up), so it's authoritative even if
+        // this split happens after a reload/table-switch that didn't restore local cart/
+        // discount state exactly.
+        if (existing?.total != null) billTotal = existing.total
+      }
 
+      const newNote = (prevNotes ? prevNotes + ' | ' : '') + 'SPLIT: ' + payMethod + ' Rp' + finalTotal
+      const newPayments = [...prevPayments, { method: payMethod, amount: finalTotal, time: now.toLocaleTimeString('id-ID',{hour:'2-digit',minute:'2-digit'}) }]
+      // The completion decision must come from the DB's true accumulated payments, never
+      // from the client-only splitPaid counter below — that counter resets to 0 on any
+      // reload/table-switch/order-recall (it isn't hydrated from order.payments), so after
+      // an interruption it silently under-counts what's already been paid and the bill
+      // could never reach "fully paid".
+      const paidSoFar = newPayments.reduce((s,p) => s + (Number(p.amount)||0), 0)
+      const isFullyPaid = paidSoFar >= billTotal
+
+      if (openBillId) {
         const saved = isFullyPaid
           ? await dbWrite('orders', 'update', {
               status: 'Paid', pay: 'Split', notes: newNote,
-              subtotal: totals.subtotal, tax: totals.tax, discount: totals.discount, total: billTotal,
               payments: newPayments, cogs: orderCogs, customer_id: customer?.id || null,
               items: mappedItems,
             }, { id: openBillId })
@@ -971,7 +992,7 @@ export default function POS() {
         }
       }
 
-      setSplitPaid(isFullyPaid ? 0 : newSplitPaid)
+      setSplitPaid(isFullyPaid ? 0 : paidSoFar)
 
       return {
         id: openBillId || ('SPLIT-' + Date.now()),
@@ -981,11 +1002,11 @@ export default function POS() {
         time: now.toLocaleTimeString('id-ID',{hour:'2-digit',minute:'2-digit'}),
         staff: staff.name, customer: customer?.name || null,
         items: splitItems || cart,
-        subtotal: totals.subtotal, tax: totals.tax, discount: totals.discount,
+        subtotal: existing?.subtotal ?? totals.subtotal, tax: existing?.tax ?? totals.tax, discount: existing?.discount ?? totals.discount,
         payments: [{ method: payMethod, amount: finalTotal }],
-        _isSplit: !isFullyPaid, splitLabel, splitPaid: newSplitPaid,
+        _isSplit: !isFullyPaid, splitLabel, splitPaid: paidSoFar,
         _fullyPaid: isFullyPaid,
-        ...(!splitItems && { _splitAmount: finalTotal, _splitRemaining: Math.max(0, billTotal - newSplitPaid) }),
+        ...(!splitItems && { _splitAmount: finalTotal, _splitRemaining: Math.max(0, billTotal - paidSoFar) }),
       }
     }
 
