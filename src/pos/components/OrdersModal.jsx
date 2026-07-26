@@ -3,6 +3,7 @@ import { supabase } from '../../lib/supabase'
 import { qr } from '../../lib/quickRead'
 import { fmt, KITCHEN_STATIONS } from '../../shared/constants'
 import { useWhatsApp } from '../hooks/useWhatsApp'
+import { dbWrite } from '../../shared/dbWrite'
 
 export default function OrdersModal({ onClose, onRecall, onPrintKitchen }) {
   const [orders, setOrders]               = useState([])
@@ -17,10 +18,11 @@ export default function OrdersModal({ onClose, onRecall, onPrintKitchen }) {
 
   useEffect(() => {
     load()
-    // Realtime subscription — auto-refresh on any order change
+    // Realtime subscription — auto-refresh on any of today's order changes
+    const today = new Date().toISOString().slice(0, 10)
     const channel = supabase
       .channel('orders_modal_realtime')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'orders' }, () => {
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'orders', filter: `date=eq.${today}` }, () => {
         load()
       })
       .subscribe()
@@ -173,7 +175,7 @@ export default function OrdersModal({ onClose, onRecall, onPrintKitchen }) {
                   })
                   const now = new Date()
                   for (const [station, sitems] of Object.entries(stations)) {
-                    await supabase.from('kitchen_tickets').insert({
+                    await dbWrite('kitchen_tickets', 'insert', {
                       id: 'KT-RPT-' + crypto.randomUUID(),
                       table: reprintOrder.table || 'Takeaway',
                       items: sitems.map(i => ({ name:i.name, qty:i.qty, note:i.note, modifiers:i.modifiers })),

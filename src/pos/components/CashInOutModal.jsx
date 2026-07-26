@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { supabase } from '../../lib/supabase'
 import { qr } from '../../lib/quickRead'
+import { dbWrite } from '../../shared/dbWrite'
 import { fmt } from '../../shared/constants'
 
 const TYPES = {
@@ -31,7 +32,7 @@ export default function CashInOutModal({ staff, onClose }) {
     if (!reason.trim()) { setError('Masukkan keterangan'); return }
     setSaving(true)
     const now = new Date()
-    const { error: err } = await supabase.from('cash_logs').insert({
+    const saved = await dbWrite('cash_logs', 'insert', {
       type,
       amount: parseInt(amount),
       reason: reason.trim(),
@@ -39,7 +40,7 @@ export default function CashInOutModal({ staff, onClose }) {
       date: now.toISOString().slice(0, 10),
       time: now.toLocaleTimeString('id-ID', { hour:'2-digit', minute:'2-digit' }),
     })
-    if (err) { setError('Gagal simpan'); setSaving(false); return }
+    if (!saved) { setError('Gagal simpan — cek koneksi dan coba lagi'); setSaving(false); return }
     setAmount(''); setReason(''); setError('')
     setSaving(false)
     loadLogs()

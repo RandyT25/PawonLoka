@@ -3,6 +3,7 @@ import { supabase } from '../../lib/supabase'
 import { offlineStore } from '../../lib/offlineStore'
 import { qr } from '../../lib/quickRead'
 import { computeOrderTotals, impliedDiscountPct } from '../../shared/orderPricing'
+import { dbWrite } from '../../shared/dbWrite'
 
 export default function FloorPlan({ staff, onSelectTable, onTakeaway, onDelivery, onBack, appSettings }) {
   const [tables,    setTables]    = useState([])
@@ -84,27 +85,30 @@ export default function FloorPlan({ staff, onSelectTable, onTakeaway, onDelivery
     const src = mergeMode
     if (!src || !targetTable || src.id === targetTable.id) { setMergeMode(null); return }
     if (!confirm("Merge " + src.name + " into " + targetTable.name + "? All items from " + src.name + " will move to " + targetTable.name + ".")) { setMergeMode(null); return }
-    // Fetch orders by ID — never by name, to avoid matching wrong tables
+    // Fetch orders by ID — never by name, to avoid matching wrong tables. Needs a live
+    // read (merging against stale/cached bill contents could silently drop items), so
+    // this part still requires connectivity — only the writes after are offline-queued.
     const srcOrder = src.open_bill_id
-      ? (await supabase.from('orders').select('*').eq('id', src.open_bill_id).maybeSingle()).data
+      ? await qr(supabase.from('orders').select('*').eq('id', src.open_bill_id).maybeSingle(), { ms:4000 })
       : null
     const tgtOrder = targetTable.open_bill_id
-      ? (await supabase.from('orders').select('*').eq('id', targetTable.open_bill_id).maybeSingle()).data
+      ? await qr(supabase.from('orders').select('*').eq('id', targetTable.open_bill_id).maybeSingle(), { ms:4000 })
       : null
+    if (src.open_bill_id && !srcOrder) { alert('Tidak bisa merge — koneksi bermasalah, coba lagi.'); setMergeMode(null); return }
     if (srcOrder) {
       if (tgtOrder) {
         const allItems = [...(tgtOrder.items||[]), ...(srcOrder.items||[])]
         // Merged bill keeps the target table's own discount rate, reapplied to the combined subtotal
         const taxRate = appSettings?.payments?.tax?.enabled ? (appSettings.payments.tax.rate||0)/100 : 0
         const totals = computeOrderTotals({ items: allItems, discountPct: impliedDiscountPct(tgtOrder), taxRate })
-        await supabase.from('orders').update(totals).eq('id',tgtOrder.id)
-        await supabase.from('orders').update({ status:'Voided', table: targetTable.name, table_area: targetTable.area||null }).eq('id',srcOrder.id)
+        await dbWrite('orders', 'update', totals, { id: tgtOrder.id })
+        await dbWrite('orders', 'update', { status:'Voided', table: targetTable.name, table_area: targetTable.area||null }, { id: srcOrder.id })
       } else {
-        await supabase.from('orders').update({ table: targetTable.name, table_area: targetTable.area||null }).eq('id',srcOrder.id)
+        await dbWrite('orders', 'update', { table: targetTable.name, table_area: targetTable.area||null }, { id: srcOrder.id })
       }
     }
-    await supabase.from('tables').update({ status:'Available', merged_with:null }).eq('id',src.id)
-    await supabase.from('tables').update({ merged_with: src.name }).eq('id',targetTable.id)
+    await dbWrite('tables', 'update', { status:'Available', merged_with:null }, { id: src.id })
+    await dbWrite('tables', 'update', { merged_with: src.name }, { id: targetTable.id })
     setMergeMode(null); await load()
     const droppedDiscountWarning = srcOrder?.discount > 0 && tgtOrder
       ? '\n\nCatatan: diskon pada ' + src.name + ' tidak ikut dipindahkan — hanya diskon ' + targetTable.name + ' yang dipakai.'
@@ -118,9 +122,9 @@ export default function FloorPlan({ staff, onSelectTable, onTakeaway, onDelivery
     if (targetTable.status === 'Occupied') { alert("Target table is occupied"); return }
     if (!confirm("Move " + src.name + " to " + targetTable.name + "?")) { setMoveMode(null); return }
     if (src.open_bill_id) {
-      await supabase.from('orders').update({ table: targetTable.name, table_area: targetTable.area||null }).eq('id', src.open_bill_id)
+      await dbWrite('orders', 'update', { table: targetTable.name, table_area: targetTable.area||null }, { id: src.open_bill_id })
     }
-    await supabase.from('tables').update({ status:'Available' }).eq('id',src.id)
+    await dbWrite('tables', 'update', { status:'Available' }, { id: src.id })
     setMoveMode(null); await load()
     alert("Moved to " + targetTable.name)
   }
@@ -128,7 +132,7 @@ export default function FloorPlan({ staff, onSelectTable, onTakeaway, onDelivery
   async function handleSplit(table) {
     // Split = mark merged table as separate again
     if (!confirm("Split " + table.name + " back to separate tables?")) return
-    await supabase.from('tables').update({ merged_with:null }).eq('id',table.id)
+    await dbWrite('tables', 'update', { merged_with:null }, { id: table.id })
     await load()
   }
 

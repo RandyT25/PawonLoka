@@ -1,7 +1,7 @@
-import { useState } from 'react'
+import { useState, memo } from 'react'
 import { fmt } from '../../shared/constants'
 
-export default function MenuGrid({ products, categories, onSelect, bundles }) {
+function MenuGrid({ products, categories, onSelect, bundles }) {
   const [activeTab, setActiveTab] = useState('All')
   const [search,    setSearch]    = useState('')
 
@@ -81,6 +81,8 @@ export default function MenuGrid({ products, categories, onSelect, bundles }) {
     </div>
   )
 }
+
+export default memo(MenuGrid)
 
 const S = {
   wrap:     { flex:1, display:'flex', flexDirection:'column', overflow:'hidden', padding:16, gap:10 },

@@ -1,5 +1,10 @@
 import { useState, useEffect } from 'react'
 import { supabase } from '../../lib/supabase'
+import { dbWrite } from '../../shared/dbWrite'
+
+function withTimeout(promise, ms) {
+  return Promise.race([promise, new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), ms))])
+}
 
 export default function ClockInOutModal({ show, onClose, staff, staffList }) {
   const [clockStaff, setClockStaff] = useState(null)
@@ -36,8 +41,10 @@ export default function ClockInOutModal({ show, onClose, staff, staffList }) {
                 if(cs){
                   const today=new Date().toISOString().slice(0,10)
                   const attId="ATT-"+(cs.name||'').replace(/\s/g,"")+"-"+today
-                  const {data}=await supabase.from("attendance").select("*").eq("id",attId).maybeSingle()
-                  setTodayAtt(data)
+                  try {
+                    const {data}=await withTimeout(supabase.from("attendance").select("*").eq("id",attId).maybeSingle(), 4000)
+                    setTodayAtt(data)
+                  } catch { setTodayAtt(null) }
                 }
               }} style={{ padding:'8px 4px',borderRadius:10,border:'2px solid '+(clockStaff?.name===s.name?'#0052CC':'#f0f0f0'),
                 background:clockStaff?.name===s.name?'#EFF6FF':'#fff',cursor:'pointer',fontSize:11,fontWeight:700,
@@ -93,17 +100,20 @@ export default function ClockInOutModal({ show, onClose, staff, staffList }) {
           const today=now.toISOString().slice(0,10)
           const attId="ATT-"+(clockStaff||staff).name.replace(/\s/g,"")+"-"+today
           const isOut=todayAtt?.clock_in&&!todayAtt?.clock_out
+          // Photo is best-effort — never block the clock-in/out on a slow/offline upload
           let photoUrl=null
           if (clockPhoto) {
-            const blob=await fetch(clockPhoto).then(r=>r.blob())
-            const fname=attId+(isOut?"-out":"-in")+".jpg"
-            const {data:up}=await supabase.storage.from("attendance-photos").upload(fname,blob,{upsert:true,contentType:"image/jpeg"})
-            if (up) { const {data:pub}=supabase.storage.from("attendance-photos").getPublicUrl(fname); photoUrl=pub?.publicUrl }
+            try {
+              const blob=await fetch(clockPhoto).then(r=>r.blob())
+              const fname=attId+(isOut?"-out":"-in")+".jpg"
+              const {data:up}=await withTimeout(supabase.storage.from("attendance-photos").upload(fname,blob,{upsert:true,contentType:"image/jpeg"}), 4000)
+              if (up) { const {data:pub}=supabase.storage.from("attendance-photos").getPublicUrl(fname); photoUrl=pub?.publicUrl }
+            } catch { /* offline/slow — proceed without the photo */ }
           }
           if (isOut) {
-            await supabase.from("attendance").update({clock_out:now.toISOString(),clock_out_photo:photoUrl}).eq("id",attId)
+            await dbWrite("attendance", "update", {clock_out:now.toISOString(),clock_out_photo:photoUrl}, {id:attId})
           } else {
-            await supabase.from("attendance").upsert({id:attId,staff_id:(clockStaff||staff).id||null,staff_name:(clockStaff||staff).name,date:today,clock_in:now.toISOString(),clock_in_photo:photoUrl,status:"on_time"},{onConflict:"id"})
+            await dbWrite("attendance", "upsert", {id:attId,staff_id:(clockStaff||staff).id||null,staff_name:(clockStaff||staff).name,date:today,clock_in:now.toISOString(),clock_in_photo:photoUrl,status:"on_time"})
           }
           setClockSaving(false)
           onClose()

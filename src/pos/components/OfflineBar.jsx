@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 
-export default function OfflineBar({ pendingCount = 0, syncing = false }) {
+export default function OfflineBar({ pendingCount = 0, syncing = false, onSyncNow }) {
   const [offline, setOffline] = useState(!navigator.onLine)
   const [showBack, setShowBack] = useState(false)
   const [backTimer, setBackTimer] = useState(null)
@@ -21,31 +21,41 @@ export default function OfflineBar({ pendingCount = 0, syncing = false }) {
     }
   }, [])
 
-  // Keep "back online" banner visible while still syncing
-  const visible = offline || showBack || syncing
+  // Also show whenever something is queued, even if the browser still thinks
+  // it's "online" — on a bad-but-technically-connected signal, the offline/online
+  // events often never fire, so pendingCount is the only reliable signal left.
+  const visible = offline || showBack || syncing || pendingCount > 0
 
   if (!visible) return null
 
   let bg      = offline ? '#DE350B' : '#00875A'
   let icon    = offline ? '📵' : syncing ? '🔄' : '✅'
   let message = offline
-    ? `Offline${pendingCount > 0 ? ` — ${pendingCount} pesanan tertunda, akan sync otomatis` : ' — Mode offline aktif'}`
+    ? `Offline${pendingCount > 0 ? ` — ${pendingCount} pesanan tersimpan, akan sync otomatis` : ' — pesanan akan tersimpan otomatis'}`
     : syncing
       ? `Menyinkronkan ${pendingCount > 0 ? pendingCount + ' item' : ''}...`
-      : 'Sinkronisasi selesai ✓'
+      : pendingCount > 0
+        ? `${pendingCount} pesanan tertunda, akan sync otomatis`
+        : 'Sinkronisasi selesai ✓'
 
   if (syncing) bg = '#F59E0B'
+  else if (!offline && pendingCount > 0) bg = '#F59E0B'
 
   return (
     <div style={{
-      position: 'fixed', top: 0, left: 0, right: 0, zIndex: 9999,
       background: bg, color: '#fff', fontSize: 12, fontWeight: 700,
-      textAlign: 'center', padding: '6px 16px',
+      textAlign: 'center', padding: '6px 16px', flexShrink: 0,
       display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
-      boxShadow: '0 2px 8px rgba(0,0,0,0.2)',
       transition: 'background 0.3s',
     }}>
       <span>{icon}</span> {message}
+      {pendingCount > 0 && !syncing && onSyncNow && (
+        <button onClick={onSyncNow}
+          style={{ background: 'rgba(255,255,255,0.2)', border: 'none', color: '#fff', fontWeight: 800,
+            fontSize: 11, padding: '3px 10px', borderRadius: 20, cursor: 'pointer' }}>
+          Sync Sekarang
+        </button>
+      )}
     </div>
   )
 }
