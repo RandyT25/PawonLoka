@@ -488,6 +488,15 @@ export default function POS() {
     offlineStore.setCache('orders_today', updated)
   }
 
+  // FloorPlan reads table occupancy via a cache-first query keyed on 'orders_modal_open' — the
+  // cache never expires on its own, so once a bill opens or closes on a table, the floor plan
+  // would keep showing the table's old state (letting staff re-open an already-open bill and
+  // create a duplicate) until something happens to invalidate it. Call this any time an order's
+  // open/paid/voided status changes so the next floor plan visit is forced to fetch fresh.
+  function invalidateFloorPlanCache() {
+    offlineStore.setCache('orders_modal_open', null)
+  }
+
   async function recallFromOrder(order) {
     // Auto-cache every order recalled — makes it available for offline access
     updateOrderCache(order)
@@ -649,6 +658,7 @@ export default function POS() {
       const ok = await dbWrite('orders', 'insert', order)
       if (!ok) { alert('Gagal simpan order'); return }
       updateOrderCache(order)
+      invalidateFloorPlanCache()
       setOpenBillId(orderId)
     }
 
@@ -886,6 +896,7 @@ export default function POS() {
         // Last item removed — delete the empty order and reset POS
         await dbWrite('orders', 'delete', null, { id: openBillId })
         if (tableNo) await dbWrite('tables', 'update', { status:'Available', open_bill_id:null }, tableArea ? { name: tableNo, area: tableArea } : { name: tableNo })
+        invalidateFloorPlanCache()
         setOpenBillId(null); setTableNo(''); setTableArea(''); setPax(0); setCustomer(null); setDiscount(0)
       } else {
         const mapped = newCart.map(i => ({ sku:i.sku||'', name:i.name, qty:i.qty, price:i.price, modifiers:i.modifiers||{}, note:i.note||'', cat:i.cat||'', _sent:i._sent||false, _station:i._station||'', isBundle:i.isBundle||false, bundleItems:i.bundleItems||null, itemDisc:i.itemDisc||0, itemDiscLabel:i.itemDiscLabel||'' }))
@@ -916,6 +927,7 @@ export default function POS() {
         // Cart is now empty — delete the order and reset POS
         await dbWrite('orders', 'delete', null, { id: openBillId })
         if (tableNo) await dbWrite('tables', 'update', { status:'Available', open_bill_id:null }, tableArea ? { name: tableNo, area: tableArea } : { name: tableNo })
+        invalidateFloorPlanCache()
         setOpenBillId(null); setTableNo(''); setTableArea(''); setPax(0); setCustomer(null); setDiscount(0)
       } else {
         const mapped = newCart.map(i => ({ sku:i.sku||'', name:i.name, qty:i.qty, price:i.price, modifiers:i.modifiers||{}, note:i.note||'', cat:i.cat||'', _sent:i._sent||false, _station:i._station||'', isBundle:i.isBundle||false, bundleItems:i.bundleItems||null, itemDisc:i.itemDisc||0, itemDiscLabel:i.itemDiscLabel||'' }))
@@ -975,6 +987,7 @@ export default function POS() {
               : null,
             deductStock(cart),
           ])
+          invalidateFloorPlanCache()
         }
       }
 
@@ -1032,6 +1045,7 @@ export default function POS() {
           : null,
         deductStock(cart),
       ])
+      invalidateFloorPlanCache()
 
       const fakeOrder = {
         id: openBillId, total: finalTotal, pay: payMethod,
