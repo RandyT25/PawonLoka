@@ -9,7 +9,8 @@ export function useOrders() {
 
   const fetchOrders = useCallback(async (status = null) => {
     setLoading(true);
-    let q = supabase.from("orders").select("*").order("created_at", { ascending: false }).limit(200);
+    const today = new Date().toISOString().slice(0, 10);
+    let q = supabase.from("orders").select("*").eq("date", today).order("created_at", { ascending: false }).limit(200);
     if (status) q = q.eq("status", status);
     const result = (await qr(q, { cache:"orders_list", ms:5000 })) || [];
     setOrders(result);
@@ -18,9 +19,14 @@ export function useOrders() {
 
   useEffect(() => {
     fetchOrders();
+    const today = new Date().toISOString().slice(0, 10);
+    // Scoped to today's rows only — an unfiltered subscription re-renders every
+    // tablet in the restaurant on every order change across all of history.
+    // Filtering by `date` (immutable once set) rather than `status` (the column
+    // that actually changes) avoids missing transition events like Open→Paid.
     const channel = supabase
       .channel("orders_realtime")
-      .on("postgres_changes", { event: "*", schema: "public", table: "orders" }, payload => {
+      .on("postgres_changes", { event: "*", schema: "public", table: "orders", filter: `date=eq.${today}` }, payload => {
         setOrders(prev => {
           if (payload.eventType === "INSERT") return [payload.new, ...prev];
           if (payload.eventType === "UPDATE") return prev.map(o => o.id === payload.new.id ? { ...o, ...payload.new } : o);

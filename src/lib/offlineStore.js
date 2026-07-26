@@ -61,6 +61,10 @@ export const offlineStore = {
   dequeue(id) {
     return tx('queue', 'readwrite', s => s.delete(id))
   },
+
+  updateEntry(entry) {
+    return tx('queue', 'readwrite', s => s.put(entry))
+  },
 }
 
 // ── Eager full sync — downloads everything needed for offline use ─────────────

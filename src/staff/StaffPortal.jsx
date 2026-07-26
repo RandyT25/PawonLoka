@@ -238,13 +238,13 @@ export default function StaffPortal() {
     const batches = parseFloat(prodBatchQty)
     const ingredients_used = lines.map(l => {
       const ing = ingredients.find(i => i.id === l.ingredient_id)
-      return { ingredient_id:l.ingredient_id, name:ing?.name||"", qty:l.qty*batches, unit:l.unit||ing?.unit||"" }
+      return { ingredient_id:l.ingredient_id, name:ing?.name||"", qty:Math.round(l.qty*batches*100)/100, unit:l.unit||ing?.unit||"" }
     })
     await submit("production", {
       sub_recipe_id: prodSubId,
       item_name: sub?.name || "",
       batch_qty: batches,
-      actual_yield: (sub?.yield_qty||1) * batches,
+      actual_yield: Math.round((sub?.yield_qty||1) * batches * 100)/100,
       yield_unit: sub?.yield_unit || sub?.unit || "gr",
       notes: prodNotes,
       needs_recipe_review: false,

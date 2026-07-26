@@ -58,6 +58,7 @@ export default function StaffSubmissions() {
   const [submissions, setSubmissions] = useState([])
   const [ingredients, setIngredients] = useState([])
   const [subRecipes,  setSubRecipes]  = useState([])
+  const [subRecipeIngs, setSubRecipeIngs] = useState([])
   const [suppliers,   setSuppliers]   = useState([])
   const [reqSelected, setReqSelected] = useState(new Set())
   const [typeFilter,  setTypeFilter]  = useState("all")
@@ -109,13 +110,14 @@ export default function StaffSubmissions() {
 
   async function load() {
     setLoading(true)
-    const [{ data:s }, { data:i }, { data:sr }, { data:sup }] = await Promise.all([
+    const [{ data:s }, { data:i }, { data:sr }, { data:sri }, { data:sup }] = await Promise.all([
       supabase.from("staff_submissions").select("*").order("submitted_at", { ascending:false }),
       supabase.from("ingredients").select("*"),
       supabase.from("sub_recipes").select("id,name,ingredient_id,yield_qty,yield_unit"),
+      supabase.from("sub_recipe_ingredients").select("*"),
       supabase.from("suppliers").select("id,name,phone"),
     ])
-    setSubmissions(s||[]); setIngredients(i||[]); setSubRecipes(sr||[]); setSuppliers(sup||[])
+    setSubmissions(s||[]); setIngredients(i||[]); setSubRecipes(sr||[]); setSubRecipeIngs(sri||[]); setSuppliers(sup||[])
     setLoading(false)
     setNewCount(0)
   }
@@ -159,9 +161,28 @@ export default function StaffSubmissions() {
         actual_yield: parseFloat(editData.actual_yield)||0,
         ingredients_used: (editData.ingredients_used||[]).map(x => ({...x, qty: parseFloat(x.qty)||0})) }
     }
+
+    if (editModal.type === "production" && editModal.status === "approved") {
+      if (!(await askConfirm(
+        "This submission was already approved and applied to inventory. Saving this edit will " +
+        "immediately adjust live ingredient stock and the linked production record to match the " +
+        "new amounts. Continue?"
+      ))) return
+      setProcessing(true)
+      try {
+        await reconcileApprovedProduction(editModal, cleaned)
+      } catch(e) {
+        alert("Error: "+e.message)
+        setProcessing(false)
+        return // bail out without writing staff_submissions.data — reconciliation failed before any mutation
+      }
+    }
+
     await supabase.from("staff_submissions").update({ data: cleaned }).eq("id", editModal.id)
     setSubmissions(prev => prev.map(s => s.id === editModal.id ? { ...s, data: cleaned } : s))
+    const wasApprovedProduction = editModal.type === "production" && editModal.status === "approved"
     setEditModal(null); setEditData(null)
+    if (wasApprovedProduction) { setProcessing(false); await load() } // refresh ingredient stock in the UI
   }
 
   // Core apply logic, shared by the single-submission Approve button and bulk approve.
@@ -242,13 +263,87 @@ export default function StaffSubmissions() {
             id:"PRD-"+Date.now(), item_id:item.id, item_name:d.item_name,
             batch_qty:producedQty, unit:d.yield_unit||d.unit, date:(sub.submitted_at||new Date().toISOString()).slice(0,10),
             produced_by:sub.submitted_by, notes:d.notes||null,
-            ingredients_used:d.ingredients_used, status:"Completed"
+            ingredients_used:d.ingredients_used, status:"Completed",
+            submission_id: sub.id,
           })
           if (prodErr) throw prodErr
         }
       }
       const { error:statusErr } = await supabase.from("staff_submissions").update({ status:"approved", reviewed_at:new Date().toISOString() }).eq("id",sub.id)
       if (statusErr) throw statusErr
+  }
+
+  // Reconciles real inventory (ingredient stock + stock_movements + the linked production_batches
+  // row) after a manager edits an ALREADY-APPROVED production submission's batch_qty/ingredients.
+  // Unlike a pending edit (which only rewrites staff_submissions.data, with no live-inventory
+  // effect until approval), this mutates stock immediately since the original approval already
+  // deducted/credited stock once — we apply the DELTA between old and new, not the full new amount.
+  async function reconcileApprovedProduction(sub, newData) {
+    // Resolve the matching production_batches row FIRST, before touching any stock, so a failed
+    // reconciliation can't leave stock partially adjusted with no batch-record update.
+    const { data:batchRow, error:batchErr } = await supabase
+      .from("production_batches").select("*").eq("submission_id", sub.id).maybeSingle()
+    if (batchErr) throw batchErr
+    if (!batchRow) {
+      throw new Error(
+        "Can't reconcile inventory: no linked production batch record found for this submission " +
+        "(it was likely approved before this feature shipped). Reject this edit, or manually adjust " +
+        "stock/production_batches instead of editing this approved submission's batch quantity."
+      )
+    }
+
+    const oldUsed = sub.data.ingredients_used || []
+    const newUsed = newData.ingredients_used || []
+
+    // Net delta per ingredient (new - old), in each ingredient's base/stock unit.
+    const deltaByIng = new Map()
+    function addDelta(ingredient_id, qty, unit, sign) {
+      const ing = ingredients.find(i => i.id === ingredient_id)
+      if (!ing) return
+      const base = toBaseUnit(ing, qty || 0, unit) * sign
+      const cur = deltaByIng.get(ingredient_id) || { deltaBase: 0, ing }
+      cur.deltaBase += base
+      deltaByIng.set(ingredient_id, cur)
+    }
+    for (const u of oldUsed) addDelta(u.ingredient_id, u.qty, u.unit, -1)
+    for (const u of newUsed) addDelta(u.ingredient_id, u.qty, u.unit, +1)
+
+    for (const [ingredient_id, { deltaBase, ing }] of deltaByIng) {
+      if (!deltaBase) continue
+      const { data:fresh } = await supabase.from("ingredients").select("stock").eq("id", ingredient_id).maybeSingle()
+      const newStock = Math.max(0, (fresh?.stock ?? ing.stock ?? 0) - deltaBase)
+      const { error:updErr } = await supabase.from("ingredients").update({ stock:newStock }).eq("id", ingredient_id)
+      if (updErr) throw updErr
+      const { error:movErr } = await supabase.from("stock_movements").insert({
+        id:"MOV-"+Date.now()+"-"+Math.random().toString(36).slice(2,6),
+        type:"Production Adjustment", ingredient_id, ingredient_name:ing.name,
+        qty:-deltaBase, unit:ing.unit, ref:sub.id,
+        note:"Production edit adjustment: "+(newData.item_name||sub.data.item_name)+" by "+sub.submitted_by,
+        date:new Date().toISOString().slice(0,10),
+        time:new Date().toLocaleTimeString("id-ID",{hour:"2-digit",minute:"2-digit"})
+      })
+      if (movErr) throw movErr
+    }
+
+    // Adjust the output ingredient's stock by the yield delta.
+    const outputIngredientId = sub.data.item_id || subRecipes.find(sr=>sr.id===sub.data.sub_recipe_id)?.ingredient_id
+    const item = outputIngredientId ? ingredients.find(i=>i.id===outputIngredientId) : null
+    const oldYield = sub.data.actual_yield ?? sub.data.batch_qty ?? 0
+    const newYield = newData.actual_yield ?? newData.batch_qty ?? 0
+    const yieldDelta = newYield - oldYield
+    if (item && yieldDelta) {
+      const { data:freshItem } = await supabase.from("ingredients").select("stock").eq("id", item.id).maybeSingle()
+      await supabase.from("ingredients").update({ stock: Math.max(0, (freshItem?.stock ?? item.stock ?? 0) + yieldDelta) }).eq("id", item.id)
+    }
+
+    // Update the linked production_batches row to match the new (post-edit) values.
+    const { error:prodUpdErr } = await supabase.from("production_batches").update({
+      batch_qty: newYield,
+      unit: newData.yield_unit || newData.unit || batchRow.unit,
+      ingredients_used: newUsed,
+      notes: newData.notes ?? batchRow.notes,
+    }).eq("id", batchRow.id)
+    if (prodUpdErr) throw prodUpdErr
   }
 
   async function approve(sub) {
@@ -624,7 +719,7 @@ export default function StaffSubmissions() {
                         const unitPrice = unitPriceFor(ing,u.unit)
                         return (
                           <tr key={i}>
-                            <td>{u.name}</td><td>{u.qty}</td><td>{u.unit}</td>
+                            <td>{u.name}</td><td>{Math.round((u.qty||0)*100)/100}</td><td>{u.unit}</td>
                             {ing ? <><td>{fmt(unitPrice)}</td><td>{fmt(u.qty*unitPrice)}</td></>
                               : <td colSpan={2} style={{ color:"var(--ink5)", fontStyle:"italic" }}>Ingredient deleted (no pricing)</td>}
                           </tr>
@@ -772,17 +867,35 @@ export default function StaffSubmissions() {
 
               {editModal.type==="production" && (() => {
                 const linkedRecipe = subRecipes.find(sr=>sr.id===editData.sub_recipe_id)
+                const recipeLines  = linkedRecipe ? subRecipeIngs.filter(l=>l.sub_recipe_id===linkedRecipe.id) : []
                 return (
                 <div style={{ display:"grid", gap:12 }}>
+                  {editModal.status==="approved" && (
+                    <div style={{ background:"#fff7ed", border:"1px solid #fb923c", borderRadius:"var(--r)", padding:"10px 12px", fontSize:12.5, color:"#9a3412", fontWeight:600 }}>
+                      ⚠ This batch was already approved. Changing the batch quantity here will immediately adjust live ingredient stock and the linked production record — not just this submission's record.
+                    </div>
+                  )}
                   <div>
                     <label className="bo-label" style={{ fontSize:13, fontWeight:800, color:"var(--ink1)" }}>Batch Quantity (× resep)</label>
                     <input type="number" value={editData.batch_qty||""} onChange={e=>{
                       const batch_qty = e.target.value
+                      const batches = parseFloat(batch_qty)||0
                       setEditData(d => ({
                         ...d, batch_qty,
                         // Keep actual_yield in sync — approve() uses actual_yield, not batch_qty, so
                         // editing batch quantity alone previously had no visible effect on anything.
-                        actual_yield: linkedRecipe ? (linkedRecipe.yield_qty||1) * (parseFloat(batch_qty)||0) : d.actual_yield,
+                        actual_yield: linkedRecipe ? Math.round((linkedRecipe.yield_qty||1) * batches * 100)/100 : d.actual_yield,
+                        // Rescale ingredients_used from the recipe's per-batch ratios too — this was
+                        // the actual reported bug: only actual_yield was kept in sync, so "resep"
+                        // (the ingredient list) stayed frozen at whatever batch_qty it was created with.
+                        // Only rescale when we have recipe lines to rescale FROM, so ad-hoc entries
+                        // with no linked recipe (or a recipe with no configured lines) aren't wiped.
+                        ingredients_used: recipeLines.length
+                          ? recipeLines.map(l => {
+                              const ing = ingredients.find(i=>i.id===l.ingredient_id)
+                              return { ingredient_id:l.ingredient_id, name:ing?.name||"", qty:Math.round(l.qty*batches*100)/100, unit:l.unit||ing?.unit||"" }
+                            })
+                          : d.ingredients_used,
                       }))
                     }} className="bo-input" />
                     {linkedRecipe && (
@@ -820,8 +933,8 @@ export default function StaffSubmissions() {
               })()}
             </div>
             <div className="bo-modal-footer">
-              <button onClick={()=>setEditModal(null)} className="bo-btn bo-btn-ghost">Cancel</button>
-              <button onClick={saveEdit} className="bo-btn bo-btn-primary">Save Changes</button>
+              <button onClick={()=>setEditModal(null)} className="bo-btn bo-btn-ghost" disabled={processing}>Cancel</button>
+              <button onClick={saveEdit} className="bo-btn bo-btn-primary" disabled={processing}>{processing ? "Saving..." : "Save Changes"}</button>
             </div>
           </div>
         </div>

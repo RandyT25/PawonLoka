@@ -2,6 +2,8 @@ import { useState, useEffect } from 'react'
 import { supabase } from '../../lib/supabase'
 import { fmt } from '../../shared/constants'
 import { qr } from '../../lib/quickRead'
+import { dbWrite } from '../../shared/dbWrite'
+import { explodeOrderPayments } from '../../shared/orderPricing'
 import { printShiftReport, printProductSoldReport } from '../hooks/usePrinter'
 
 export default function ShiftModal({ staff, shift, onOpen, onClose, onDismiss, onLogout, printer }) {
@@ -20,7 +22,7 @@ export default function ShiftModal({ staff, shift, onOpen, onClose, onDismiss, o
   async function loadReport() {
     const today = new Date().toISOString().slice(0, 10)
     const [orders, cashLogs, openBills, notClockedOut] = await Promise.all([
-      qr(supabase.from('orders').select('total,pay,status').eq('date', today).eq('status', 'Paid'), { ms:5000 }),
+      qr(supabase.from('orders').select('total,pay,payments,status').eq('date', today).eq('status', 'Paid'), { ms:5000 }),
       qr(supabase.from('cash_logs').select('*').eq('date', today), { ms:5000 }),
       qr(supabase.from('orders').select('id,table,total').eq('date', today).eq('status', 'Open'), { ms:5000 }),
       qr(supabase.from('attendance').select('id,staff_name,clock_in').eq('date', today).not('clock_in', 'is', null).is('clock_out', null), { ms:5000 }),
@@ -29,7 +31,9 @@ export default function ShiftModal({ staff, shift, onOpen, onClose, onDismiss, o
     const sales = {}
     let totalSales = 0
     ;(orders||[]).forEach(o => {
-      sales[o.pay] = (sales[o.pay] || 0) + o.total
+      explodeOrderPayments(o).forEach(({ method, amount }) => {
+        sales[method] = (sales[method] || 0) + amount
+      })
       totalSales += o.total
     })
 
@@ -53,7 +57,7 @@ export default function ShiftModal({ staff, shift, onOpen, onClose, onDismiss, o
       float_open: parseInt(float),
       sales:      0,
     }
-    await supabase.from('shifts').insert(s)
+    await dbWrite('shifts', 'insert', s)
     onOpen(s)
     // Non-blocking clock-in reminder
     setTimeout(() => {
@@ -69,13 +73,18 @@ export default function ShiftModal({ staff, shift, onOpen, onClose, onDismiss, o
   async function closeShift() {
     if (!confirmed) { setConfirmed(true); return }
 
-    // Re-query live state — report could be seconds old
+    // Re-query live state — report could be seconds old. Short timeout with a fallback
+    // to the already-loaded report (cache-backed) so a flaky connection doesn't block
+    // closing the shift entirely — the guard still applies, just against slightly
+    // staler data if the live re-check can't complete.
     const today = new Date().toISOString().slice(0, 10)
-    const [{ data: stillOpen }, { data: stillClockedIn }] = await Promise.all([
-      supabase.from('orders').select('id,table,total').eq('date', today).eq('status', 'Open'),
-      supabase.from('attendance').select('id,staff_name').eq('date', today).not('clock_in', 'is', null).is('clock_out', null),
+    const [stillOpen, stillClockedIn] = await Promise.all([
+      qr(supabase.from('orders').select('id,table,total').eq('date', today).eq('status', 'Open'), { ms:4000 }),
+      qr(supabase.from('attendance').select('id,staff_name').eq('date', today).not('clock_in', 'is', null).is('clock_out', null), { ms:4000 }),
     ])
-    if (stillOpen?.length > 0 || stillClockedIn?.length > 0) {
+    const openBillsCheck = stillOpen ?? report?.openBills ?? []
+    const notClockedOutCheck = stillClockedIn ?? report?.notClockedOut ?? []
+    if (openBillsCheck.length > 0 || notClockedOutCheck.length > 0) {
       setConfirmed(false)
       await loadReport()
       return
@@ -83,14 +92,14 @@ export default function ShiftModal({ staff, shift, onOpen, onClose, onDismiss, o
 
     setSaving(true)
     const parsedActual = actualCash !== '' ? parseInt(actualCash) : null
-    await supabase.from('shifts').update({
+    await dbWrite('shifts', 'update', {
       clock_out:         new Date().toLocaleTimeString('id-ID', { hour:'2-digit', minute:'2-digit' }),
       float_close:       report?.expectedCash || 0,
       actual_cash:       parsedActual,
       cash_discrepancy:  parsedActual !== null ? parsedActual - (report?.expectedCash || 0) : null,
       sales:             report?.totalSales || 0,
       notes:             note || null,
-    }).eq('id', shift.id)
+    }, { id: shift.id })
     // Print shift closing report if printer is connected
     if (printer) {
       try {

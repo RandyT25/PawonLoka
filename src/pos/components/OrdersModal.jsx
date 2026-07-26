@@ -3,6 +3,7 @@ import { supabase } from '../../lib/supabase'
 import { qr } from '../../lib/quickRead'
 import { fmt, KITCHEN_STATIONS } from '../../shared/constants'
 import { useWhatsApp } from '../hooks/useWhatsApp'
+import { dbWrite } from '../../shared/dbWrite'
 
 export default function OrdersModal({ onClose, onRecall, onPrintKitchen }) {
   const [orders, setOrders]               = useState([])
@@ -17,10 +18,11 @@ export default function OrdersModal({ onClose, onRecall, onPrintKitchen }) {
 
   useEffect(() => {
     load()
-    // Realtime subscription — auto-refresh on any order change
+    // Realtime subscription — auto-refresh on any of today's order changes
+    const today = new Date().toISOString().slice(0, 10)
     const channel = supabase
       .channel('orders_modal_realtime')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'orders' }, () => {
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'orders', filter: `date=eq.${today}` }, () => {
         load()
       })
       .subscribe()
@@ -39,11 +41,6 @@ export default function OrdersModal({ onClose, onRecall, onPrintKitchen }) {
     const result = (await qr(q, { cache:'orders_modal_'+tab, ms:5000 })) || []
     setOrders(result)
     setLoading(false)
-  }
-
-  async function markPaid(order) {
-    await supabase.from('orders').update({ status: 'Paid' }).eq('id', order.id)
-    load()
   }
 
   async function handleResendWA(order) {
@@ -178,7 +175,7 @@ export default function OrdersModal({ onClose, onRecall, onPrintKitchen }) {
                   })
                   const now = new Date()
                   for (const [station, sitems] of Object.entries(stations)) {
-                    await supabase.from('kitchen_tickets').insert({
+                    await dbWrite('kitchen_tickets', 'insert', {
                       id: 'KT-RPT-' + crypto.randomUUID(),
                       table: reprintOrder.table || 'Takeaway',
                       items: sitems.map(i => ({ name:i.name, qty:i.qty, note:i.note, modifiers:i.modifiers })),
@@ -230,5 +227,4 @@ const S = {
   tabActive: { background:'#0A1628', borderColor:'#0A1628', color:'white' },
   orderCard: { border:'1px solid #E2E8F0', borderRadius:12, padding:14, marginBottom:10 },
   recallBtn: { flex:1, padding:'8px 12px', background:'#EFF6FF', color:'#2563EB', border:'none', borderRadius:8, fontSize:12, fontWeight:700, cursor:'pointer' },
-  paidBtn:   { flex:1, padding:'8px 12px', background:'#F0FDF4', color:'#16A34A', border:'none', borderRadius:8, fontSize:12, fontWeight:700, cursor:'pointer' },
 }

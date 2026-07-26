@@ -3,6 +3,7 @@ import { supabase } from "../../lib/supabase"
 import DateRangePicker, { buildDateRange } from "./DateRangePicker"
 import { exportPDF, exportExcel, formatPeriodLabel, filenameSlug, fmtIDR } from "./exportUtils"
 import { isFoodCategory } from "../lib/ingredientCategories"
+import { explodeOrderPayments } from "../../shared/orderPricing"
 
 const fmt = n => "Rp " + Number(n || 0).toLocaleString("id-ID")
 
@@ -68,7 +69,7 @@ export default function Dashboard({ onNavChange }) {
 
     // Payment method breakdown
     const pm = {}
-    paid.forEach(o => { const m = o.pay||"Other"; pm[m] = (pm[m]||0)+(o.total||0) })
+    paid.forEach(o => { explodeOrderPayments(o).forEach(({ method, amount }) => { pm[method] = (pm[method]||0) + amount }) })
     const payArr = Object.entries(pm).map(([method,amount]) => ({ method, amount, pct: totalSales ? Math.round(amount/totalSales*100) : 0 })).sort((a,b) => b.amount-a.amount)
 
     // Top 5 products by qty

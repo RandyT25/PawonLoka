@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from "react"
 import { supabase } from "../../lib/supabase"
 import DateRangePicker, { buildDateRange } from "./DateRangePicker"
+import { explodeOrderPayments } from "../../shared/orderPricing"
 
 const fmt = n => "Rp " + Number(n||0).toLocaleString("id-ID")
 const fmtDate = d => d ? new Date(d).toLocaleString("id-ID",{day:"2-digit",month:"short",year:"numeric",hour:"2-digit",minute:"2-digit"}) : "—"
@@ -54,11 +55,12 @@ export default function Rekonsiliasi() {
     for (const o of orders || []) {
       if (o.status && o.status !== "Paid" && o.status !== "paid") continue
       const day = o.date || o.created_at?.slice(0,10) || "?"
-      const payRaw = o.pay || "Cash"
-      const key = day + "|" + payRaw
-      if (!groups[key]) groups[key] = { date:day, pay:payRaw, amount:0, count:0, cashier: o.staff||"—" }
-      groups[key].amount += o.total || 0
-      groups[key].count++
+      explodeOrderPayments(o).forEach(({ method, amount }) => {
+        const key = day + "|" + method
+        if (!groups[key]) groups[key] = { date:day, pay:method, amount:0, count:0, cashier: o.staff||"—" }
+        groups[key].amount += amount
+        groups[key].count++
+      })
     }
 
     const rows = Object.values(groups).map(g => {

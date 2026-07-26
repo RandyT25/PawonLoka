@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from "react"
 import { supabase } from "../lib/supabase"
 import "./owner.css"
 import CalendarRangePicker from "../backoffice/components/CalendarRangePicker"
+import { explodeOrderPayments } from "../shared/orderPricing"
 
 /* ─── helpers ─── */
 function fmt(n)  { return "Rp " + Number(n||0).toLocaleString("id-ID") }
@@ -1057,7 +1058,7 @@ function useOwnerData(range, customDate, customDateTo) {
     const proyeksiBulanIni=dom>0?Math.round(mtd/dom*dim):0
 
     const pm={}
-    paid.forEach(o=>{ const m=o.pay||"Other"; pm[m]=(pm[m]||0)+(o.total||0) })
+    paid.forEach(o=>{ explodeOrderPayments(o).forEach(({method,amount})=>{ pm[method]=(pm[method]||0)+amount }) })
     const payArr=Object.entries(pm).map(([method,amount])=>({method,amount,pct:sales?Math.round(amount/sales*100):0})).sort((a,b)=>b.amount-a.amount)
 
     const im={}

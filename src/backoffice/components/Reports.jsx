@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useMemo } from "react"
 import { supabase } from "../../lib/supabase"
 import MultiItemSelect from "./MultiItemSelect"
 import { exportPDF, exportExcel, fmtIDR } from "./exportUtils"
+import { explodeOrderPayments } from "../../shared/orderPricing"
 
 const fmt = n => "Rp " + Number(n||0).toLocaleString("id-ID")
 
@@ -63,8 +64,7 @@ export default function Reports() {
   const avgOrder    = totalOrders ? Math.round(totalSales/totalOrders) : 0
 
   const byPayment = displayOrders.reduce((acc,o) => {
-    const m = o.pay || "Other"
-    acc[m] = (acc[m]||0) + (o.total||0)
+    explodeOrderPayments(o).forEach(({ method, amount }) => { acc[method] = (acc[method]||0) + amount })
     return acc
   }, {})
 

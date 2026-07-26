@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback, Suspense, lazy } from 'react'
 import { supabase } from '../lib/supabase'
 import { fmt, TAX_RATE, STAFF, KITCHEN_STATIONS } from '../shared/constants'
 import useCart from './hooks/useCart'
@@ -6,6 +6,8 @@ import useOrders from './hooks/useOrders'
 import useOfflineSync from './hooks/useOfflineSync'
 import { offlineStore, offlineFullSync } from '../lib/offlineStore'
 import { qr } from '../lib/quickRead'
+import { dbWrite } from '../shared/dbWrite'
+import { computeOrderTotals } from '../shared/orderPricing'
 
 // Convert a qty expressed in `unit` into the ingredient's own base/stock unit
 function toBaseUnit(ing, qty, unit) {
@@ -17,64 +19,30 @@ function toBaseUnit(ing, qty, unit) {
   if (ing.unit==='ml' && fallbacks[unit]) return qty * fallbacks[unit]
   return qty
 }
-
-// Offline-safe write: always queues on any network failure, 5s hard timeout
-async function dbWrite(table, op, payload, match = null) {
-  function isNetworkError(e) {
-    if (!navigator.onLine) return true
-    const msg = (e?.message || '').toLowerCase()
-    return msg.includes('timeout') || msg.includes('fetch') || msg.includes('network') || msg.includes('failed to fetch') || msg.includes('connection')
-  }
-
-  // Fast path: definitely offline
-  if (!navigator.onLine) {
-    await offlineStore.enqueue({ table, op, payload, match })
-    window.dispatchEvent(new Event('offline-queue-updated'))
-    return true
-  }
-
-  try {
-    // Hard 5s timeout — if no internet (WiFi with no data), never hang
-    const timer = new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 5000))
-    let q = supabase.from(table)[op](payload)
-    if (match) Object.entries(match).forEach(([k, v]) => { q = q.eq(k, v) })
-    const { error } = await Promise.race([q, timer])
-    if (error) throw error
-    return true
-  } catch(e) {
-    if (isNetworkError(e)) {
-      // No real internet — queue for later sync
-      await offlineStore.enqueue({ table, op, payload, match })
-      window.dispatchEvent(new Event('offline-queue-updated'))
-      return true
-    }
-    console.error('[dbWrite]', table, op, e?.message || e)
-    return false // real DB error (column missing, RLS, etc.)
-  }
-}
 import PinLogin from './components/PinLogin'
 import MenuGrid from './components/MenuGrid'
 import Cart from './components/Cart'
 import ChargeModal from './components/ChargeModal'
 import ModifierModal from './components/ModifierModal'
 import CustomerSearch from './components/CustomerSearch'
-import ShiftModal from './components/ShiftModal'
-import VoidModal from './components/VoidModal'
-import ReprintModal from './components/ReprintModal'
 import CustomItemModal from './components/CustomItemModal'
-import PromoModal from './components/PromoModal'
-import CashInOutModal from './components/CashInOutModal'
-import SplitModal from './components/SplitModal'
-import FloorPlan from './components/FloorPlan'
 import TablePicker from './components/TablePicker'
-import OrdersModal from './components/OrdersModal'
-import PrinterSettings from './components/PrinterSettings'
 import { usePrinter, prefetchLogo } from './hooks/usePrinter'
 import { useWhatsApp } from './hooks/useWhatsApp'
-import ClockInOutModal from './components/ClockInOutModal'
 import MobileMenuSlider from './components/MobileMenuSlider'
 import './pos.mobile.css'
 import OfflineBar from './components/OfflineBar'
+// Situational modals — only needed after a specific user action, not on first
+// paint, so they're code-split out of the main bundle like Backoffice already does.
+const ShiftModal      = lazy(() => import('./components/ShiftModal'))
+const VoidModal       = lazy(() => import('./components/VoidModal'))
+const ReprintModal    = lazy(() => import('./components/ReprintModal'))
+const PromoModal      = lazy(() => import('./components/PromoModal'))
+const CashInOutModal  = lazy(() => import('./components/CashInOutModal'))
+const FloorPlan       = lazy(() => import('./components/FloorPlan'))
+const OrdersModal     = lazy(() => import('./components/OrdersModal'))
+const PrinterSettings = lazy(() => import('./components/PrinterSettings'))
+const ClockInOutModal = lazy(() => import('./components/ClockInOutModal'))
 
 export default function POS() {
   const [offlineReady,  setOfflineReady]  = useState(false)
@@ -122,20 +90,9 @@ export default function POS() {
   const [shiftAsked, setShiftAsked]       = useState(false)
   const [showClock, setShowClock]         = useState(false)
   const [showSettings, setShowSettings]   = useState(false)
-  const [isOffline, setIsOffline] = useState(!navigator.onLine)
   const [showMobileMenu, setShowMobileMenu] = useState(false)
   const [voidAuth, setVoidAuth] = useState(null) // {orderId, reason, pin}
 
-  useEffect(() => {
-    const goOffline = () => setIsOffline(true)
-    const goOnline = () => setIsOffline(false)
-    window.addEventListener('offline', goOffline)
-    window.addEventListener('online', goOnline)
-    return () => {
-      window.removeEventListener('offline', goOffline)
-      window.removeEventListener('online', goOnline)
-    }
-  }, [])
   // Sync session-critical state to sessionStorage on every change
   useEffect(() => {
     if (staff) sessionStorage.setItem('pos_staff', JSON.stringify(staff))
@@ -238,8 +195,51 @@ export default function POS() {
 
   const { cart, setCart, addItem, updateQty, clearCart, subtotal } = useCart()
   const { orders } = useOrders()
-  const { pendingCount, syncing } = useOfflineSync()
+  const { pendingCount, syncing, syncNow } = useOfflineSync()
   const [dismissedBills, setDismissedBills] = useState(new Set())
+
+  // Memoized (and declared ahead of the component's early returns — hooks can't
+  // be called conditionally) so a stable onSelect can be passed to MenuGrid
+  // without defeating React.memo.
+  const handleModifierConfirm = useCallback((product, modifiers, note) => {
+    // Calculate extra price from modifiers
+    const mods = product._mods || modifierGroups
+    const extraPrice = Object.entries(modifiers).reduce((sum, [modId, optName]) => {
+      const mod = mods.find(m => m.id === modId)
+      const opt = mod?.options?.find(o => (o.name||o) === optName)
+      return sum + (opt?.price || 0)
+    }, 0)
+    const finalProduct = extraPrice > 0
+      ? { ...product, price: product.price + extraPrice, _basePrice: product.price }
+      : { ...product }
+    // Build display labels with price
+    const displayMods = Object.fromEntries(
+      Object.entries(modifiers).map(([modId, optName]) => {
+        const mod = mods.find(m => m.id === modId)
+        const opt = mod?.options?.find(o => (o.name||o) === optName)
+        const label = opt?.price > 0 ? optName + ' +Rp ' + opt.price.toLocaleString('id-ID') : optName
+        return [modId, label]
+      })
+    )
+    addItem({ ...finalProduct, note }, displayMods)
+    setModifierItem(null)
+  }, [modifierGroups, addItem])
+
+  const handleProductSelect = useCallback(product => {
+    const prodCatId = categories.find(c => c.name === product.cat)?.id
+    const productLinkedMods = Array.isArray(product.linked_modifiers) && product.linked_modifiers.length > 0
+    const relevantMods = productLinkedMods
+      ? modifierGroups.filter(m => product.linked_modifiers.includes(m.id))
+      : modifierGroups.filter(m => {
+          const hasCatFilter = Array.isArray(m.linked_cats) && m.linked_cats.length > 0
+          const hasProdFilter = Array.isArray(m.linked_products) && m.linked_products.length > 0
+          if (!hasCatFilter && !hasProdFilter) return true
+          if (hasCatFilter && prodCatId && m.linked_cats.includes(prodCatId)) return true
+          if (hasProdFilter && m.linked_products.includes(product.sku)) return true
+          return false
+        })
+    if (relevantMods.length) { setModifierItem({...product, _mods: relevantMods}) } else { handleModifierConfirm(product, {}, '') }
+  }, [categories, modifierGroups, handleModifierConfirm])
 
   useEffect(() => {
     if (!staff) return
@@ -273,11 +273,13 @@ export default function POS() {
   // Live product sync — reacts to backoffice edits (Products/Profitability) and the
   // manual "Sync to POS" push, so an already-open POS session doesn't need a reload
   useEffect(() => {
+    let debounceTimer = null
+    const debouncedLoad = () => { clearTimeout(debounceTimer); debounceTimer = setTimeout(loadData, 800) }
     const ch = supabase.channel('pos_products_sync')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'products' }, () => loadData())
-      .on('broadcast', { event: 'force_sync' }, () => loadData())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'products' }, debouncedLoad)
+      .on('broadcast', { event: 'force_sync' }, debouncedLoad)
       .subscribe()
-    return () => { supabase.removeChannel(ch) }
+    return () => { clearTimeout(debounceTimer); supabase.removeChannel(ch) }
   }, [])
 
   async function restoreShift() {
@@ -291,7 +293,7 @@ export default function POS() {
     // today's orders, so a never-closed bill would otherwise sit invisible
     // forever instead of freeing up its table for new orders.
     await supabase.from('orders')
-      .update({ status: 'Voided', void_reason: 'Auto-voided: stale open bill from a previous day, never closed', voided_by: 'System' })
+      .update({ status: 'void', void_reason: 'Auto-voided: stale open bill from a previous day, never closed', voided_by: 'System' })
       .eq('status', 'Open')
       .neq('date', today)
     // Find the single active shift for today (shared across all staff)
@@ -317,9 +319,9 @@ export default function POS() {
       const skus = [...new Set(items.map(i => i.sku).filter(Boolean))]
       if (!skus.length) return
       // Batch fetch all recipes for all SKUs in one query
-      const { data: allRecipes } = await supabase.from('recipes')
+      const allRecipes = await qr(supabase.from('recipes')
         .select('product_id, ingredient_id, qty, unit')
-        .in('product_id', skus)
+        .in('product_id', skus), { ms:5000 })
       if (!allRecipes?.length) return
       // Fetch ingredient records (incl. conversions) up front so recipe-line units can be converted to each ingredient's base unit
       const ingIds = [...new Set(allRecipes.map(r => r.ingredient_id))]
@@ -338,15 +340,9 @@ export default function POS() {
         }
       }
       if (!Object.keys(deductions).length) return
-      // Parallel updates
-      await Promise.all(Object.keys(deductions).map(id => {
-        const ing = ingMap[id]
-        if (!ing) return null
-        return supabase.from('ingredients').update({
-          stock: Math.max(0, (ing.stock || 0) - deductions[id])
-        }).eq('id', id)
-      }))
-      // Log deductions to stock_movements for consumption history
+      // Ingredient stock updates and the stock_movements log are independent of
+      // each other (movements are built from `deductions`/`ingMap`, not from the
+      // update results) — run both in parallel instead of one after the other.
       const movDate = new Date().toISOString().slice(0, 10)
       const movTime = new Date().toLocaleTimeString('id-ID', { hour:'2-digit', minute:'2-digit' })
       const ts = Date.now()
@@ -365,7 +361,16 @@ export default function POS() {
           time: movTime,
         }
       })
-      await supabase.from('stock_movements').insert(movements).catch(() => {})
+      await Promise.all([
+        Promise.all(Object.keys(deductions).map(id => {
+          const ing = ingMap[id]
+          if (!ing) return null
+          return supabase.from('ingredients').update({
+            stock: Math.max(0, (ing.stock || 0) - deductions[id])
+          }).eq('id', id)
+        })),
+        supabase.from('stock_movements').insert(movements).catch(() => {}),
+      ])
     } catch(e) { console.error('Stock deduction error:', e) }
   }
 
@@ -454,59 +459,21 @@ export default function POS() {
 
   // Shift modal
   if (showShift) return (
-    <ShiftModal
-      staff={staff}
-      shift={shift}
-      printer={printer}
-      onOpen={s => { setShift(s); setShowShift(false); setTimeout(()=>{ if(window.confirm('Shift dibuka! Jangan lupa Clock In ya ' + staff.name + '?')) { setShowClock(true) } },500) }}
-      onClose={() => { setShift(null); setShowShift(false); setTimeout(()=>{ if(window.confirm('Shift ditutup! Jangan lupa Clock Out ya ' + staff.name + '?')) { setShowClock(true) } },500) }}
-      onDismiss={() => setShowShift(false)}
-      onLogout={() => { setStaff(null); setShift(null); setShowShift(false); clearCart(); setCustomer(null); setTableNo(''); setTableArea(''); setOpenBillId(null) }}
-    />
+    <Suspense fallback={null}>
+      <ShiftModal
+        staff={staff}
+        shift={shift}
+        printer={printer}
+        onOpen={s => { setShift(s); setShowShift(false); setTimeout(()=>{ if(window.confirm('Shift dibuka! Jangan lupa Clock In ya ' + staff.name + '?')) { setShowClock(true) } },500) }}
+        onClose={() => { setShift(null); setShowShift(false); setTimeout(()=>{ if(window.confirm('Shift ditutup! Jangan lupa Clock Out ya ' + staff.name + '?')) { setShowClock(true) } },500) }}
+        onDismiss={() => setShowShift(false)}
+        onLogout={() => { setStaff(null); setShift(null); setShowShift(false); clearCart(); setCustomer(null); setTableNo(''); setTableArea(''); setOpenBillId(null) }}
+      />
+    </Suspense>
   )
 
   const tax   = Math.round(subtotal * TAX_RATE_LIVE)
   const total = subtotal + tax
-
-  function handleProductSelect(product) {
-    const prodCatId = categories.find(c => c.name === product.cat)?.id
-    const productLinkedMods = Array.isArray(product.linked_modifiers) && product.linked_modifiers.length > 0
-    const relevantMods = productLinkedMods
-      ? modifierGroups.filter(m => product.linked_modifiers.includes(m.id))
-      : modifierGroups.filter(m => {
-          const hasCatFilter = Array.isArray(m.linked_cats) && m.linked_cats.length > 0
-          const hasProdFilter = Array.isArray(m.linked_products) && m.linked_products.length > 0
-          if (!hasCatFilter && !hasProdFilter) return true
-          if (hasCatFilter && prodCatId && m.linked_cats.includes(prodCatId)) return true
-          if (hasProdFilter && m.linked_products.includes(product.sku)) return true
-          return false
-        })
-    if (relevantMods.length) { setModifierItem({...product, _mods: relevantMods}) } else { handleModifierConfirm(product, {}, '') }
-  }
-
-  function handleModifierConfirm(product, modifiers, note) {
-    // Calculate extra price from modifiers
-    const mods = product._mods || modifierGroups
-    const extraPrice = Object.entries(modifiers).reduce((sum, [modId, optName]) => {
-      const mod = mods.find(m => m.id === modId)
-      const opt = mod?.options?.find(o => (o.name||o) === optName)
-      return sum + (opt?.price || 0)
-    }, 0)
-    const finalProduct = extraPrice > 0
-      ? { ...product, price: product.price + extraPrice, _basePrice: product.price }
-      : { ...product }
-    // Build display labels with price
-    const displayMods = Object.fromEntries(
-      Object.entries(modifiers).map(([modId, optName]) => {
-        const mod = mods.find(m => m.id === modId)
-        const opt = mod?.options?.find(o => (o.name||o) === optName)
-        const label = opt?.price > 0 ? optName + ' +Rp ' + opt.price.toLocaleString('id-ID') : optName
-        return [modId, label]
-      })
-    )
-    addItem({ ...finalProduct, note }, displayMods)
-    setModifierItem(null)
-  }
 
 
   // Keep local order cache in sync — always merges with existing so partial updates never lose fields
@@ -720,7 +687,10 @@ export default function POS() {
       ? new Set([...Object.keys(stations), ...Object.keys(cancelStations)])
       : new Set()
     const isFirstSend = cart.every(i => !i._sent)
-    for (const station of allStations) {
+    // Print every station concurrently — a single slow/unreachable printer
+    // shouldn't stall the others or delay the "Order dikirim!" confirmation.
+    const failedStations = []
+    await Promise.all([...allStations].map(async station => {
       const addItems = stations[station] || []
       const cItems   = cancelStations[station] || []
       const type     = addItems.length && cItems.length ? 'update' : cItems.length ? 'cancellation' : isFirstSend ? 'new' : 'addition'
@@ -744,8 +714,11 @@ export default function POS() {
         await Promise.race([printJob, new Promise((_, rej) => setTimeout(() => rej(new Error('print timeout')), 15000))])
       } catch(e) {
         console.error('[print] failed for station', station, e)
-        alert('⚠️ Gagal cetak ke ' + station + '\nPesanan SUDAH tersimpan di sistem.\nCek koneksi printer, atau gunakan tombol Cetak Checker.')
+        failedStations.push(station)
       }
+    }))
+    if (failedStations.length) {
+      alert('⚠️ Gagal cetak ke ' + failedStations.join(', ') + '\nPesanan SUDAH tersimpan di sistem.\nCek koneksi printer, atau gunakan tombol Cetak Checker.')
     }
     // Mark all cart items as sent; update _printedQty so next comparison is correct
     setCart(prev => prev.map(i => ({ ...i, _sent:true, _station: getStation(i.cat), _printedQty: i.qty })))
@@ -798,11 +771,11 @@ export default function POS() {
     const stns = {}
     items.forEach(i => { const s = getStation(i.cat); if (!stns[s]) stns[s] = []; stns[s].push(i) })
     for (const [station, stItems] of Object.entries(stns)) {
-      supabase.from('kitchen_tickets').insert({
+      dbWrite('kitchen_tickets', 'insert', {
         id: 'KT-' + crypto.randomUUID(), table: tableNo || orderType,
         items: stItems.map(i => ({ name:i.name, qty:i.qty })),
         time: nowTime, status: 'New', station, type: 'cancellation',
-      }).catch(() => {})
+      })
       const stationRole = ROLE_MAP[station] || ROLE_MAP[station?.charAt(0).toUpperCase()+station?.slice(1)] || 'kitchen'
       try {
         await printer.printKitchenTicket({
@@ -911,18 +884,16 @@ export default function POS() {
     if (openBillId) {
       if (newCart.length === 0) {
         // Last item removed — delete the empty order and reset POS
-        await supabase.from('orders').delete().eq('id', openBillId)
-        if (tableNo) { let q = supabase.from('tables').update({ status:'Available', open_bill_id:null }).eq('name', tableNo); if (tableArea) q = q.eq('area', tableArea); await q }
+        await dbWrite('orders', 'delete', null, { id: openBillId })
+        if (tableNo) await dbWrite('tables', 'update', { status:'Available', open_bill_id:null }, tableArea ? { name: tableNo, area: tableArea } : { name: tableNo })
         setOpenBillId(null); setTableNo(''); setTableArea(''); setPax(0); setCustomer(null); setDiscount(0)
       } else {
-        const sub = newCart.reduce((a,i) => a + i.price*i.qty, 0)
-        const discA = discount ? Math.round(sub*discount/100) : 0
-        const tx = Math.round((sub-discA)*TAX_RATE_LIVE)
-        await supabase.from('orders').update({
-          items: newCart.map(i => ({ sku:i.sku||'', name:i.name, qty:i.qty, price:i.price, modifiers:i.modifiers||{}, note:i.note||'', cat:i.cat||'', _sent:i._sent||false, _station:i._station||'', isBundle:i.isBundle||false, bundleItems:i.bundleItems||null })),
-          subtotal: sub, tax: tx, total: sub-discA+tx,
+        const mapped = newCart.map(i => ({ sku:i.sku||'', name:i.name, qty:i.qty, price:i.price, modifiers:i.modifiers||{}, note:i.note||'', cat:i.cat||'', _sent:i._sent||false, _station:i._station||'', isBundle:i.isBundle||false, bundleItems:i.bundleItems||null, itemDisc:i.itemDisc||0, itemDiscLabel:i.itemDiscLabel||'' }))
+        const totals = computeOrderTotals({ items: mapped, discountPct: discount, taxRate: TAX_RATE_LIVE })
+        await dbWrite('orders', 'update', {
+          ...totals,
           notes: (item.notes||'') + ' | REMOVE: ' + item.name + ' - ' + reason
-        }).eq('id', openBillId)
+        }, { id: openBillId })
       }
     }
   }
@@ -943,24 +914,21 @@ export default function POS() {
     if (openBillId) {
       if (newCart.length === 0) {
         // Cart is now empty — delete the order and reset POS
-        await supabase.from('orders').delete().eq('id', openBillId)
-        if (tableNo) { let q = supabase.from('tables').update({ status:'Available', open_bill_id:null }).eq('name', tableNo); if (tableArea) q = q.eq('area', tableArea); await q }
+        await dbWrite('orders', 'delete', null, { id: openBillId })
+        if (tableNo) await dbWrite('tables', 'update', { status:'Available', open_bill_id:null }, tableArea ? { name: tableNo, area: tableArea } : { name: tableNo })
         setOpenBillId(null); setTableNo(''); setTableArea(''); setPax(0); setCustomer(null); setDiscount(0)
       } else {
-        const sub = newCart.reduce((a,i) => a + i.price*i.qty, 0)
-        const discA = discount ? Math.round(sub*discount/100) : 0
-        const tx = Math.round((sub-discA)*TAX_RATE_LIVE)
-        await supabase.from('orders').update({
-          items: newCart.map(i => ({ sku:i.sku||'', name:i.name, qty:i.qty, price:i.price, modifiers:i.modifiers||{}, note:i.note||'', cat:i.cat||'', _sent:i._sent||false, _station:i._station||'', isBundle:i.isBundle||false, bundleItems:i.bundleItems||null })),
-          subtotal: sub, tax: tx, total: sub-discA+tx,
+        const mapped = newCart.map(i => ({ sku:i.sku||'', name:i.name, qty:i.qty, price:i.price, modifiers:i.modifiers||{}, note:i.note||'', cat:i.cat||'', _sent:i._sent||false, _station:i._station||'', isBundle:i.isBundle||false, bundleItems:i.bundleItems||null, itemDisc:i.itemDisc||0, itemDiscLabel:i.itemDiscLabel||'' }))
+        const totals = computeOrderTotals({ items: mapped, discountPct: discount, taxRate: TAX_RATE_LIVE })
+        await dbWrite('orders', 'update', {
+          ...totals,
           notes: (item.notes||'') + ' | REDUCE: ' + item.name + ' -' + delta + ' - ' + reason
-        }).eq('id', openBillId)
+        }, { id: openBillId })
       }
     }
   }
 
   async function handleCharge({ payMethod, cashGiven, usePoints, finalTotal, splitLabel, splitItems, orderNote, promoDisc = 0, promoName, multiPay }) {
-    const discAmt = discount ? Math.round(subtotal * discount / 100) : 0
     const orderCogs = cart.reduce((sum, item) => {
       const prod = products.find(p => p.sku === item.sku)
       return sum + (prod?.cogs || 0) * (item.qty || 1)
@@ -969,8 +937,10 @@ export default function POS() {
     // SPLIT — record partial payment
     if (splitLabel) {
       const now = new Date()
+      const mappedItems = cart.map(i => ({ sku:i.sku||'', name:i.name, qty:i.qty, price:i.price, modifiers:i.modifiers||{}, note:i.note||'', cat:i.cat||'', itemDisc:i.itemDisc||0, itemDiscLabel:i.itemDiscLabel||'' }))
+      const totals = computeOrderTotals({ items: mappedItems, discountPct: discount, promoDisc, pointsValue: (usePoints||0)*100, taxRate: TAX_RATE_LIVE })
+      const billTotal = totals.total
       const newSplitPaid = splitPaid + finalTotal
-      const billTotal = subtotal + Math.round(subtotal * TAX_RATE_LIVE) - discAmt
       const isFullyPaid = newSplitPaid >= billTotal
 
       if (openBillId) {
@@ -982,9 +952,10 @@ export default function POS() {
 
         const saved = isFullyPaid
           ? await dbWrite('orders', 'update', {
-              status: 'Paid', pay: 'Split', notes: newNote, total: billTotal,
+              status: 'Paid', pay: 'Split', notes: newNote,
+              subtotal: totals.subtotal, tax: totals.tax, discount: totals.discount, total: billTotal,
               payments: newPayments, cogs: orderCogs, customer_id: customer?.id || null,
-              items: cart.map(i => ({ sku:i.sku||'', name:i.name, qty:i.qty, price:i.price, modifiers:i.modifiers||{}, note:i.note||'', cat:i.cat||'', itemDisc:i.itemDisc||0, itemDiscLabel:i.itemDiscLabel||'' })),
+              items: mappedItems,
             }, { id: openBillId })
           : await dbWrite('orders', 'update', { notes: newNote, payments: newPayments }, { id: openBillId })
 
@@ -994,13 +965,16 @@ export default function POS() {
         }
 
         if (isFullyPaid) {
-          // All paid — close the bill
-          if (tableNo) await dbWrite('tables', 'update', { status: 'Available' }, tableArea ? { name: tableNo, area: tableArea } : { name: tableNo })
-          if (customer?.id) {
-            const pts = Math.floor(billTotal / 100)
-            await dbWrite('customers', 'update', { points: (customer.points||0)+pts, visits: (customer.visits||0)+1 }, { id: customer.id })
-          }
-          await deductStock(cart)
+          // All paid — close the bill (independent writes, run together)
+          await Promise.all([
+            tableNo
+              ? dbWrite('tables', 'update', { status: 'Available' }, tableArea ? { name: tableNo, area: tableArea } : { name: tableNo })
+              : null,
+            customer?.id
+              ? dbWrite('customers', 'update', { points: (customer.points||0)+Math.floor(billTotal / 100), visits: (customer.visits||0)+1 }, { id: customer.id })
+              : null,
+            deductStock(cart),
+          ])
         }
       }
 
@@ -1014,7 +988,7 @@ export default function POS() {
         time: now.toLocaleTimeString('id-ID',{hour:'2-digit',minute:'2-digit'}),
         staff: staff.name, customer: customer?.name || null,
         items: splitItems || cart,
-        subtotal, tax: Math.round(subtotal*TAX_RATE_LIVE), discount: discAmt,
+        subtotal: totals.subtotal, tax: totals.tax, discount: totals.discount,
         payments: [{ method: payMethod, amount: finalTotal }],
         _isSplit: !isFullyPaid, splitLabel, splitPaid: newSplitPaid,
         _fullyPaid: isFullyPaid,
@@ -1025,32 +999,39 @@ export default function POS() {
     // FULL PAYMENT — if open bill exists, update it to Paid instead of creating new
     if (openBillId) {
       const now = new Date()
-      await dbWrite('orders', 'update', {
+      const mappedItems = cart.map(i => ({ sku:i.sku||'', name:i.name, qty:i.qty, price:i.price, modifiers:i.modifiers||{}, note:i.note||'', cat:i.cat||'', itemDisc:i.itemDisc||0, itemDiscLabel:i.itemDiscLabel||'' }))
+      const totals = computeOrderTotals({ items: mappedItems, discountPct: discount, promoDisc, pointsValue: (usePoints||0)*100, taxRate: TAX_RATE_LIVE })
+      const saved = await dbWrite('orders', 'update', {
         status: 'Paid', pay: payMethod,
         cash_given: payMethod === 'Cash' ? parseInt(cashGiven) : null,
         change: payMethod === 'Cash' ? (parseInt(cashGiven)||0) - finalTotal : null,
-        total: finalTotal, discount: discAmt + promoDisc,
+        subtotal: totals.subtotal, tax: totals.tax, discount: totals.discount, total: finalTotal,
         notes: orderNote || null, promo: promoName || null,
         time: now.toLocaleTimeString('id-ID',{hour:'2-digit',minute:'2-digit'}),
         cogs: orderCogs, customer_id: customer?.id || null,
-        items: cart.map(i => ({ sku:i.sku||'', name:i.name, qty:i.qty, price:i.price, modifiers:i.modifiers||{}, note:i.note||'', cat:i.cat||'', itemDisc:i.itemDisc||0, itemDiscLabel:i.itemDiscLabel||'' })),
+        items: mappedItems,
       }, { id: openBillId })
 
-      // Update customer points (queued if offline — they get their points when synced)
-      if (customer) {
-        const pts = Math.floor(finalTotal / 100)
-        await dbWrite('customers', 'update', {
-          points: (customer.points || 0) + pts,
-          visits: (customer.visits || 0) + 1,
-        }, { id: customer.id })
+      if (!saved) {
+        alert('⚠️ Gagal menyimpan pembayaran — cek koneksi dan coba lagi. Pesanan BELUM tercatat sebagai dibayar.')
+        return null
       }
 
-      // Update table back to Available
-      if (tableNo) {
-        await dbWrite('tables', 'update', { status: 'Available', open_bill_id: null }, tableArea ? { name: tableNo, area: tableArea } : { name: tableNo })
-      }
-
-      await deductStock(cart)
+      // Customer points, table release, and stock deduction are all independent
+      // of each other once the order itself is safely saved/queued — run them
+      // together instead of one after another.
+      await Promise.all([
+        customer
+          ? dbWrite('customers', 'update', {
+              points: (customer.points || 0) + Math.floor(finalTotal / 100),
+              visits: (customer.visits || 0) + 1,
+            }, { id: customer.id })
+          : null,
+        tableNo
+          ? dbWrite('tables', 'update', { status: 'Available', open_bill_id: null }, tableArea ? { name: tableNo, area: tableArea } : { name: tableNo })
+          : null,
+        deductStock(cart),
+      ])
 
       const fakeOrder = {
         id: openBillId, total: finalTotal, pay: payMethod,
@@ -1061,7 +1042,7 @@ export default function POS() {
         cashier: staff.name, staff: staff.name,
         table: tableNo || null,
         customer: customer?.name || null, items: cart,
-        subtotal, tax: Math.round(subtotal*TAX_RATE_LIVE), discount: discAmt + promoDisc,
+        subtotal: totals.subtotal, tax: totals.tax, discount: totals.discount,
         payments: [{ method: payMethod, amount: finalTotal }],
       }
       clearCart(); setCustomer(null); setTableNo(''); setTableArea(''); setPax(0); setDiscount(0)
@@ -1073,11 +1054,13 @@ export default function POS() {
     // NO OPEN BILL — create and immediately close a new order
     const now2 = new Date()
     const newOrderId = 'ORD-' + Date.now()
+    const noBillItems = cart.map(i => ({ sku:i.sku||'', name:i.name, qty:i.qty, price:i.price, modifiers:i.modifiers||{}, note:i.note||'', cat:i.cat||'', itemDisc:i.itemDisc||0, itemDiscLabel:i.itemDiscLabel||'' }))
+    const noBillTotals = computeOrderTotals({ items: noBillItems, discountPct: discount, promoDisc, pointsValue: (usePoints||0)*100, taxRate: TAX_RATE_LIVE })
     const newOrder = {
       id: newOrderId,
-      items: cart.map(i => ({ sku:i.sku||'', name:i.name, qty:i.qty, price:i.price, modifiers:i.modifiers||{}, note:i.note||'', cat:i.cat||'', itemDisc:i.itemDisc||0, itemDiscLabel:i.itemDiscLabel||'' })),
-      subtotal, tax: Math.round(subtotal * TAX_RATE_LIVE),
-      discount: discAmt + promoDisc, total: finalTotal,
+      items: noBillItems,
+      subtotal: noBillTotals.subtotal, tax: noBillTotals.tax,
+      discount: noBillTotals.discount, total: finalTotal,
       pay: payMethod, staff: staff.name,
       table: tableNo || null, table_area: tableArea || null,
       customer: customer?.name || null, customer_id: customer?.id || null,
@@ -1088,13 +1071,17 @@ export default function POS() {
       change: payMethod === 'Cash' ? Math.max(0, (parseInt(cashGiven)||0) - finalTotal) : 0,
       cogs: orderCogs,
     }
-    const { error: insertErr } = await supabase.from('orders').insert(newOrder)
-    if (insertErr) { alert('Gagal simpan order: ' + insertErr.message); return null }
-    if (customer?.id) {
-      const pts = usePoints ? 0 : Math.floor(finalTotal / 100)
-      await supabase.from('customers').update({ points: (customer.points||0)+pts, visits: (customer.visits||0)+1 }).eq('id', customer.id)
-    }
-    await deductStock(cart)
+    const saved = await dbWrite('orders', 'insert', newOrder)
+    if (!saved) { alert('⚠️ Gagal menyimpan order — cek koneksi dan coba lagi.'); return null }
+    await Promise.all([
+      customer?.id
+        ? dbWrite('customers', 'update', {
+            points: (customer.points||0) + (usePoints ? 0 : Math.floor(finalTotal / 100)),
+            visits: (customer.visits||0) + 1,
+          }, { id: customer.id })
+        : null,
+      deductStock(cart),
+    ])
     clearCart(); setCustomer(null); setTableNo(''); setTableArea(''); setPax(0); setDiscount(0)
     setOpenBillId(null); setOrderType('Dine-in'); setDeliveryFee(0)
     setDeliveryAddr(''); setAppliedPromo(null); setSplitPaid(0)
@@ -1132,14 +1119,16 @@ export default function POS() {
   }
 
   if (showFloorPlan) return (
-    <FloorPlan
-      staff={staff}
-      appSettings={appSettings}
-      onSelectTable={handleTableSelect}
-      onTakeaway={() => { clearCart(); setOrderType('Takeaway'); setTableNo(''); setTableArea(''); setShowFloorPlan(false) }}
-      onDelivery={() => { clearCart(); setOrderType('Delivery'); setTableNo(''); setTableArea(''); setShowFloorPlan(false) }}
-      onBack={() => setShowFloorPlan(false)}
-    />
+    <Suspense fallback={null}>
+      <FloorPlan
+        staff={staff}
+        appSettings={appSettings}
+        onSelectTable={handleTableSelect}
+        onTakeaway={() => { clearCart(); setOrderType('Takeaway'); setTableNo(''); setTableArea(''); setShowFloorPlan(false) }}
+        onDelivery={() => { clearCart(); setOrderType('Delivery'); setTableNo(''); setTableArea(''); setShowFloorPlan(false) }}
+        onBack={() => setShowFloorPlan(false)}
+      />
+    </Suspense>
   )
 
   if (loading) return (
@@ -1151,11 +1140,7 @@ export default function POS() {
 
   return (
     <div style={S.app}>
-      {isOffline && (
-        <div style={{ background:'#FF8B00', color:'#fff', textAlign:'center', padding:'6px', fontSize:12, fontWeight:700 }}>
-          Offline Mode — Orders will sync when connected
-        </div>
-      )}
+      <OfflineBar pendingCount={pendingCount} syncing={syncing} onSyncNow={syncNow} />
       {printer.printError && (
         <div style={{ background:'#DC2626', color:'#fff', padding:'8px 12px', fontSize:12, fontWeight:700, display:'flex', alignItems:'center', justifyContent:'space-between', gap:8 }}>
           <span>🖨 Print Error: {printer.printError}</span>
@@ -1187,9 +1172,9 @@ export default function POS() {
                 onSelect={async t => {
                   if (t.name !== tableNo) {
                     if (openBillId) {
-                      await supabase.from('orders').update({ table: t.name, table_area: t.area || null }).eq('id', openBillId)
-                      await supabase.from('tables').update({ status: 'Occupied' }).eq('id', t.id)
-                      if (tableNo) { let q = supabase.from('tables').update({ status: 'Available' }).eq('name', tableNo); if (tableArea) q = q.eq('area', tableArea); await q }
+                      await dbWrite('orders', 'update', { table: t.name, table_area: t.area || null }, { id: openBillId })
+                      await dbWrite('tables', 'update', { status: 'Occupied' }, { id: t.id })
+                      if (tableNo) await dbWrite('tables', 'update', { status: 'Available' }, tableArea ? { name: tableNo, area: tableArea } : { name: tableNo })
                     }
                   }
                   setTableNo(t.name); setTableArea(t.area || ''); setOrderType('Dine-in')
@@ -1247,7 +1232,6 @@ export default function POS() {
             categories={categories}
             bundles={bundles}
             onSelect={handleProductSelect}
-            onCustomItem={() => setShowCustomItem(true)}
           />
         </div>
         <div className={"pos-cart-panel" + (cartOpen ? " mobile-open" : "")}>
@@ -1339,7 +1323,7 @@ export default function POS() {
           onConfirm={handleCharge}
           onClose={() => setShowCharge(false)}
           onReprint={handleReprint}
-          onSuccess={async (paidOrder) => { setShowCharge(false); if (tableNo) { let q = supabase.from('tables').update({ status: 'Available' }).eq('name', tableNo); if (tableArea) q = q.eq('area', tableArea); await q } if (paidOrder && paidOrder.id) { await supabase.from('audit_logs').insert({ action:'payment', staff_name:staff?.name, details:{ order_id:paidOrder.id, total:paidOrder.total }, created_at:new Date().toISOString() }).catch(()=>{}); offlineStore.setCache('offline_open_bill_' + paidOrder.id, null) } if (paidOrder && paidOrder.id && customer?.phone) { try { sendReceipt(paidOrder, customer) } catch(e) {} } clearCart(); setCustomer(null); setTableNo(''); setTableArea(''); setOpenBillId(null); setDiscount(0); setSplitPaid(0); setAppliedPromo(null); setDeliveryFee(0); setDeliveryAddr('') }}
+          onSuccess={async (paidOrder) => { setShowCharge(false); if (tableNo) await dbWrite('tables', 'update', { status: 'Available' }, tableArea ? { name: tableNo, area: tableArea } : { name: tableNo }); if (paidOrder && paidOrder.id) { await dbWrite('audit_logs', 'insert', { action:'payment', module:'pos', user_name:staff?.name, details: JSON.stringify({ order_id:paidOrder.id, total:paidOrder.total }) }); offlineStore.setCache('offline_open_bill_' + paidOrder.id, null) } if (paidOrder && paidOrder.id && customer?.phone) { try { sendReceipt(paidOrder, customer) } catch(e) {} } clearCart(); setCustomer(null); setTableNo(''); setTableArea(''); setOpenBillId(null); setDiscount(0); setSplitPaid(0); setAppliedPromo(null); setDeliveryFee(0); setDeliveryAddr('') }}
           appliedPromo={appliedPromo}
           onOpenPromo={() => { setShowCharge(false); setShowPromo(true) }}
           payMethods={ACTIVE_PAY_METHODS}
@@ -1359,10 +1343,7 @@ export default function POS() {
             setCustomer(c)
             setShowCustomer(false)
             if (openBillId) {
-              await supabase.from('orders').update({
-                customer: c.name,
-                customer_id: c.id
-              }).eq('id', openBillId)
+              await dbWrite('orders', 'update', { customer: c.name, customer_id: c.id }, { id: openBillId })
             }
           }}
           onClose={() => setShowCustomer(false)}
@@ -1370,29 +1351,39 @@ export default function POS() {
       )}
 
       {showOrders && (
-        <OrdersModal
-          onClose={() => setShowOrders(false)}
-          onRecall={recallFromOrder}
-          onPrintKitchen={async (ticket) => { await printer.printKitchenTicket(ticket) }}
-        />
+        <Suspense fallback={null}>
+          <OrdersModal
+            onClose={() => setShowOrders(false)}
+            onRecall={recallFromOrder}
+            onPrintKitchen={async (ticket) => { await printer.printKitchenTicket(ticket) }}
+          />
+        </Suspense>
       )}
 
       {showReprint && (
-        <ReprintModal onClose={() => setShowReprint(false)} onReprint={handleReprint} />
+        <Suspense fallback={null}>
+          <ReprintModal onClose={() => setShowReprint(false)} onReprint={handleReprint} />
+        </Suspense>
       )}
       {showVoid && (
-        <VoidModal onClose={() => setShowVoid(false)} managerPin={appSettings?.pos_behaviour?.manager_pin || '9999'} />
+        <Suspense fallback={null}>
+          <VoidModal onClose={() => setShowVoid(false)} managerPin={appSettings?.pos_behaviour?.manager_pin || '9999'} />
+        </Suspense>
       )}
 
       {showCashLog && (
-        <CashInOutModal staff={staff} onClose={() => setShowCashLog(false)} />
+        <Suspense fallback={null}>
+          <CashInOutModal staff={staff} onClose={() => setShowCashLog(false)} />
+        </Suspense>
       )}
-      <ClockInOutModal
-        show={showClock}
-        onClose={() => setShowClock(false)}
-        staff={staff}
-        staffList={staffList}
-      />
+      <Suspense fallback={null}>
+        <ClockInOutModal
+          show={showClock}
+          onClose={() => setShowClock(false)}
+          staff={staff}
+          staffList={staffList}
+        />
+      </Suspense>
       <MobileMenuSlider
         show={showMobileMenu}
         onClose={() => setShowMobileMenu(false)}
@@ -1430,11 +1421,11 @@ export default function POS() {
               <button onClick={async()=>{
                 if (!voidAuth.reason?.trim()) { alert('Please enter a reason'); return }
                 if (!staff?.permissions?.void) {
-                  const {data:mgr} = await supabase.from('staff').select('pin,permissions').eq('pin',voidAuth.pin).maybeSingle()
+                  const mgr = staffList.find(s => s.pin === voidAuth.pin)
                   if (!mgr?.permissions?.void) { alert('Invalid PIN or no void permission'); return }
                 }
-                await supabase.from('orders').update({ status:'void', void_reason:voidAuth.reason, voided_by:staff.name }).eq('id',voidAuth.orderId)
-                await supabase.from('audit_logs').insert({ action:'void', staff_name:staff.name, details:{ order_id:voidAuth.orderId, reason:voidAuth.reason }, created_at:new Date().toISOString() }).catch(()=>{})
+                await dbWrite('orders', 'update', { status:'void', void_reason:voidAuth.reason, voided_by:staff.name }, { id: voidAuth.orderId })
+                await dbWrite('audit_logs', 'insert', { action:'void', module:'pos', user_name:staff.name, details: JSON.stringify({ order_id:voidAuth.orderId, reason:voidAuth.reason }) })
                 setVoidAuth(null)
                 alert('Order voided')
               }} style={{ flex:1,padding:12,borderRadius:10,border:'none',background:'#DC2626',color:'#fff',fontWeight:700,cursor:'pointer',fontSize:14 }}>
@@ -1459,19 +1450,21 @@ export default function POS() {
               </div>
               <div style={{ flex:1, overflowY:'auto', padding:16, display:'flex', flexDirection:'column', gap:16 }}>
                 <div style={{ fontSize:13, fontWeight:700, color:'#091E42', paddingBottom:8, borderBottom:'1px solid #DFE1E6' }}>Printer & Hardware</div>
-                <PrinterSettings hook={printer} />
+                <Suspense fallback={null}><PrinterSettings hook={printer} /></Suspense>
               </div>
             </div>
           </div>
       )}
 
       {showPromo && (
-        <PromoModal
-          subtotal={subtotal}
-          customer={customer}
-          onApply={p => { setAppliedPromo(p); setShowPromo(false) }}
-          onClose={() => setShowPromo(false)}
-        />
+        <Suspense fallback={null}>
+          <PromoModal
+            subtotal={subtotal}
+            customer={customer}
+            onApply={p => { setAppliedPromo(p); setShowPromo(false) }}
+            onClose={() => setShowPromo(false)}
+          />
+        </Suspense>
       )}
 
       {showCustomItem && (
@@ -1482,7 +1475,6 @@ export default function POS() {
       )}
 
       {showTablePicker === false && null}
-      <OfflineBar pendingCount={pendingCount} syncing={syncing} />
 
     </div>
   )

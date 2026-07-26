@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import { supabase } from '../../lib/supabase'
 import { fmt } from '../../shared/constants'
 import { qr } from '../../lib/quickRead'
+import { dbWrite } from '../../shared/dbWrite'
 
 export default function VoidModal({ onClose, managerPin = '9999' }) {
   const [step, setStep] = useState('search')
@@ -56,16 +57,18 @@ export default function VoidModal({ onClose, managerPin = '9999' }) {
 
     setLoading(true)
     const newStatus = refundType === 'full' ? 'Voided' : 'Refunded'
-    const { error: err } = await supabase.from('orders').update({
+    const saved = await dbWrite('orders', 'update', {
       status: newStatus,
+      total: selected.total - amount,
+      refund_amount: (selected.refund_amount || 0) + amount,
       notes: (selected.notes || '') + ' | ' + newStatus.toUpperCase() + ': Rp' + amount + ' - ' + reason
-    }).eq('id', selected.id)
+    }, { id: selected.id })
 
-    if (err) { setError('Gagal'); setLoading(false); return }
+    if (!saved) { setError('Gagal — cek koneksi dan coba lagi'); setLoading(false); return }
 
     // Log refund as cash out if cash payment
     if (selected.pay === 'Cash' || refundType === 'partial') {
-      await supabase.from('cash_logs').insert({
+      await dbWrite('cash_logs', 'insert', {
         type: 'expense',
         amount,
         reason: newStatus + ': ' + selected.id + ' - ' + reason,
@@ -76,12 +79,12 @@ export default function VoidModal({ onClose, managerPin = '9999' }) {
     }
 
     // Audit trail
-    supabase.from('audit_logs').insert({
+    await dbWrite('audit_logs', 'insert', {
       action: refundType === 'full' ? 'void' : 'refund',
       module: 'pos',
       user_name: 'Manager',
       details: JSON.stringify({ order_id: selected.id, reason, amount }),
-    }).catch(() => {})
+    })
 
     setStep('done')
     setLoading(false)

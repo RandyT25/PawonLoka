@@ -14,14 +14,14 @@ function sendWA(order) {
 }
 
 const STATUS_COLORS = {
-  Paid:      { bg:"#DCFCE7", color:"#16A34A" },
-  Open:      { bg:"#FEF9C3", color:"#CA8A04" },
-  Voided:    { bg:"#FEE2E2", color:"#DC2626" },
+  paid:      { bg:"#DCFCE7", color:"#16A34A" },
+  open:      { bg:"#FEF9C3", color:"#CA8A04" },
   void:      { bg:"#FEE2E2", color:"#DC2626" },
-  Refunded:  { bg:"#FEE2E2", color:"#DC2626" },
-  Cancelled: { bg:"#FEE2E2", color:"#DC2626" },
+  voided:    { bg:"#FEE2E2", color:"#DC2626" },
+  refunded:  { bg:"#FEE2E2", color:"#DC2626" },
+  cancelled: { bg:"#FEE2E2", color:"#DC2626" },
 }
-const VOID_STATUSES = ["Voided","void","Refunded","Cancelled"]
+const VOID_STATUSES = ["void","voided","refunded","cancelled"]
 
 function todayStr() { return new Date().toISOString().slice(0,10) }
 
@@ -60,7 +60,7 @@ export default function Orders() {
     setBulkVoiding(true)
     const ids = staleOpen.map(o => o.id)
     await supabase.from("orders").update({
-      status: "Voided",
+      status: "void",
       void_reason: "Auto-voided: stale open bill from a previous day, never closed",
       voided_by: "Backoffice (bulk cleanup)",
     }).in("id", ids)
@@ -79,7 +79,7 @@ export default function Orders() {
     setVoiding(true)
     const fullReason = voidNote ? voidReason + ": " + voidNote : voidReason
     await supabase.from("orders").update({
-      status: "Voided",
+      status: "void",
       void_reason: fullReason,
       voided_by: "Backoffice",
     }).eq("id", voidModal.id)
@@ -116,7 +116,7 @@ export default function Orders() {
   }
 
   const filtered = orders.filter(o => {
-    const matchStatus = statusFilter === "all" || (statusFilter === "Voided" ? VOID_STATUSES.includes(o.status) : o.status === statusFilter)
+    const matchStatus = statusFilter === "all" || (statusFilter === "void" ? VOID_STATUSES.includes(o.status?.toLowerCase()) : o.status?.toLowerCase() === statusFilter)
     const matchSearch = !search ||
       o.id?.toLowerCase().includes(search.toLowerCase()) ||
       o.staff?.toLowerCase().includes(search.toLowerCase()) ||
@@ -125,7 +125,7 @@ export default function Orders() {
     return matchStatus && matchSearch
   })
 
-  const paidOrders   = filtered.filter(o => o.status === "Paid")
+  const paidOrders   = filtered.filter(o => o.status?.toLowerCase() === "paid")
   const totalRevenue = paidOrders.reduce((s,o) => s + (o.total||0), 0)
   const totalOrders  = paidOrders.length
   const avgOrder     = totalOrders ? totalRevenue / totalOrders : 0
@@ -193,7 +193,7 @@ export default function Orders() {
           <input placeholder="Search order, staff, customer, table..." value={search}
             onChange={e=>setSearch(e.target.value)} className="bo-input" style={{ flex:1, minWidth:200 }} />
           <div style={{ display:"flex", gap:6 }}>
-            {["all","Paid","Open","Voided"].map(s => (
+            {["all","paid","open","void"].map(s => (
               <button key={s} onClick={()=>setStatusFilter(s)}
                 className={"bo-btn " + (statusFilter===s?"bo-btn-primary":"bo-btn-ghost")}
                 style={{ textTransform:"capitalize", padding:"6px 14px" }}>{s}</button>
@@ -225,7 +225,7 @@ export default function Orders() {
             ) : filtered.length === 0 ? (
               <tr><td colSpan={9} style={{ textAlign:"center", padding:40, color:"var(--ink4)" }}>No orders found</td></tr>
             ) : filtered.map(o => {
-              const sc   = STATUS_COLORS[o.status] || STATUS_COLORS.open
+              const sc   = STATUS_COLORS[o.status?.toLowerCase()] || STATUS_COLORS.open
               const time = o.created_at ? new Date(o.created_at).toLocaleTimeString("id-ID",{hour:"2-digit",minute:"2-digit"}) : "-"
               return (
                 <tr key={o.id} onClick={()=>setSelected(o)}
@@ -350,10 +350,10 @@ export default function Orders() {
             </div>
             <div className="bo-modal-footer">
               <button onClick={()=>setSelected(null)} className="bo-btn bo-btn-ghost">Close</button>
-              {selected.status === "Paid" && (
+              {selected.status?.toLowerCase() === "paid" && (
                 <button onClick={()=>sendWA(selected)} className="bo-btn bo-btn-primary">WA Receipt</button>
               )}
-              {selected.status === "Paid" && (
+              {selected.status?.toLowerCase() === "paid" && (
                 <button onClick={()=>{ setVoidModal(selected); setVoidReason(""); setVoidNote("") }}
                   className="bo-btn bo-btn-danger">Void Order</button>
               )}
