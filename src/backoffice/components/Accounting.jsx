@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react"
+import { useState, useEffect, useMemo, Fragment } from "react"
 import { supabase } from "../../lib/supabase"
 import ClosingReport from "./ClosingReport"
 import CashLog from "./CashLog"
@@ -57,6 +57,7 @@ export default function Accounting() {
   const [loading,      setLoading]      = useState(true)
   const [expModal,     setExpModal]     = useState(false)
   const [kasBonModal,  setKasBonModal]  = useState(false)
+  const [kbExpanded,   setKbExpanded]   = useState({})
   const [expForm,      setExpForm]      = useState({ date:new Date().toISOString().slice(0,10), category:"kitchen", description:"", amount:"", payment_method:"Cash", notes:"" })
   const [expDetailModal, setExpDetailModal] = useState(null)
   const [expCoa,       setExpCoa]       = useState([])
@@ -162,6 +163,25 @@ export default function Accounting() {
 
   // Outstanding kas bon
   const kbOutstanding = kasBonList.filter(k=>k.status==="outstanding").reduce((a,k)=>a+(k.amount||0),0)
+
+  // Group kas bon entries by staff so a staff with multiple advances shows one
+  // summary row (total + count) instead of scattered individual rows — expandable
+  // to reveal the individual dated entries. Staff with only one entry in the period
+  // don't need a group at all; they render as a plain row same as before.
+  const kbGroups = useMemo(() => {
+    const byStaff = {}
+    kasBonList.forEach(k => {
+      if (!byStaff[k.staff_name]) byStaff[k.staff_name] = []
+      byStaff[k.staff_name].push(k)
+    })
+    return Object.entries(byStaff)
+      .map(([staff_name, entries]) => ({
+        staff_name,
+        entries: [...entries].sort((a,b)=>b.date.localeCompare(a.date)),
+        total: entries.reduce((a,k)=>a+(k.amount||0),0),
+      }))
+      .sort((a,b)=>b.total-a.total)
+  }, [kasBonList])
 
   // Manual expenses by category
   const manualExpenses = expenses.filter(e=>e.auto_source!=="po"&&e.auto_source!=="salary")
@@ -274,6 +294,8 @@ export default function Accounting() {
     await supabase.from("kas_bon").update({ status:"deducted", deducted_date:new Date().toISOString().slice(0,10) }).eq("id",id)
     setKasBonList(prev=>prev.map(k=>k.id===id?{...k,status:"deducted"}:k))
   }
+
+  function toggleKbExpand(staffName) { setKbExpanded(e => ({ ...e, [staffName]: !e[staffName] })) }
 
   async function saveOpeningBal(amount) {
     await supabase.from("opening_balance").upsert({ id:period, amount, updated_at:new Date().toISOString() })
@@ -790,28 +812,69 @@ export default function Accounting() {
             <table className="bo-table">
               <thead><tr><th>Tanggal</th><th>Staff</th><th>Jumlah</th><th>Alasan</th><th>Status</th><th>Aksi</th></tr></thead>
               <tbody>
-                {kasBonList.map(k=>(
-                  <tr key={k.id}>
-                    <td style={{ fontSize:12 }}>{k.date}</td>
-                    <td style={{ fontWeight:700 }}>{k.staff_name}</td>
-                    <td style={{ fontWeight:700,color:"#DE350B" }}>{fmt(k.amount)}</td>
-                    <td style={{ fontSize:12 }}>{k.reason}</td>
-                    <td>
-                      <span style={{ fontSize:11,fontWeight:700,padding:"2px 8px",borderRadius:10,
-                        background:k.status==="outstanding"?"#FFEBE6":k.status==="deducted"?"#E3FCEF":"var(--surface)",
-                        color:k.status==="outstanding"?"#DE350B":k.status==="deducted"?"#00875A":"#6B778C" }}>
-                        {k.status==="outstanding"?"Outstanding":k.status==="deducted"?"Dipotong":"Cancelled"}
-                      </span>
-                    </td>
-                    <td>
-                      {k.status==="outstanding" && (
-                        <button onClick={()=>markKasBonDeducted(k.id)} className="bo-btn bo-btn-ghost bo-btn-sm">
-                          Tandai Dipotong
-                        </button>
-                      )}
-                    </td>
-                  </tr>
-                ))}
+                {kbGroups.map(g => {
+                  if (g.entries.length === 1) {
+                    const k = g.entries[0]
+                    return (
+                      <tr key={k.id}>
+                        <td style={{ fontSize:12 }}>{k.date}</td>
+                        <td style={{ fontWeight:700 }}>{k.staff_name}</td>
+                        <td style={{ fontWeight:700,color:"#DE350B" }}>{fmt(k.amount)}</td>
+                        <td style={{ fontSize:12 }}>{k.reason}</td>
+                        <td>
+                          <span style={{ fontSize:11,fontWeight:700,padding:"2px 8px",borderRadius:10,
+                            background:k.status==="outstanding"?"#FFEBE6":k.status==="deducted"?"#E3FCEF":"var(--surface)",
+                            color:k.status==="outstanding"?"#DE350B":k.status==="deducted"?"#00875A":"#6B778C" }}>
+                            {k.status==="outstanding"?"Outstanding":k.status==="deducted"?"Dipotong":"Cancelled"}
+                          </span>
+                        </td>
+                        <td>
+                          {k.status==="outstanding" && (
+                            <button onClick={()=>markKasBonDeducted(k.id)} className="bo-btn bo-btn-ghost bo-btn-sm">
+                              Tandai Dipotong
+                            </button>
+                          )}
+                        </td>
+                      </tr>
+                    )
+                  }
+                  const isOpen = !!kbExpanded[g.staff_name]
+                  return (
+                    <Fragment key={g.staff_name}>
+                      <tr onClick={()=>toggleKbExpand(g.staff_name)} style={{ cursor:"pointer", background:"var(--surface)" }}>
+                        <td colSpan={2} style={{ fontWeight:700 }}>
+                          <span style={{ background:"none", border:"none", cursor:"pointer", fontSize:12, color:"var(--ink4)", marginRight:8 }}>{isOpen?"▼":"▶"}</span>
+                          {g.staff_name}
+                        </td>
+                        <td style={{ fontWeight:700,color:"#DE350B" }}>{fmt(g.total)}</td>
+                        <td colSpan={2} style={{ fontSize:12, color:"var(--ink4)" }}>{g.entries.length} entries</td>
+                        <td></td>
+                      </tr>
+                      {isOpen && g.entries.map(k=>(
+                        <tr key={k.id} style={{ background:"var(--surface)" }}>
+                          <td style={{ fontSize:12, paddingLeft:32 }}>{k.date}</td>
+                          <td style={{ fontSize:12, color:"var(--ink4)" }}>{k.staff_name}</td>
+                          <td style={{ fontWeight:700,color:"#DE350B" }}>{fmt(k.amount)}</td>
+                          <td style={{ fontSize:12 }}>{k.reason}</td>
+                          <td>
+                            <span style={{ fontSize:11,fontWeight:700,padding:"2px 8px",borderRadius:10,
+                              background:k.status==="outstanding"?"#FFEBE6":k.status==="deducted"?"#E3FCEF":"var(--surface)",
+                              color:k.status==="outstanding"?"#DE350B":k.status==="deducted"?"#00875A":"#6B778C" }}>
+                              {k.status==="outstanding"?"Outstanding":k.status==="deducted"?"Dipotong":"Cancelled"}
+                            </span>
+                          </td>
+                          <td>
+                            {k.status==="outstanding" && (
+                              <button onClick={(e)=>{e.stopPropagation(); markKasBonDeducted(k.id)}} className="bo-btn bo-btn-ghost bo-btn-sm">
+                                Tandai Dipotong
+                              </button>
+                            )}
+                          </td>
+                        </tr>
+                      ))}
+                    </Fragment>
+                  )
+                })}
                 {kasBonList.length===0&&<tr><td colSpan={6} style={{ textAlign:"center",color:"var(--ink5)",padding:"32px 0" }}>No kas bon records</td></tr>}
               </tbody>
             </table>
