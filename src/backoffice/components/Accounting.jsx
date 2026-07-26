@@ -37,6 +37,7 @@ const SUPPLY_CATEGORY_TO_EXPENSE_CAT = {
   "Cleaning & Sanitation":    "floor_cleaning",
   "Trash & Vacuum Bags":      "floor_cleaning",
   "Office & Stationery":      "lain",
+  "Gas & Utilities":          "gas_utilities",
   "Other Supplies":           "lain",
 }
 
@@ -78,6 +79,7 @@ export default function Accounting() {
   const [kbExpanded,   setKbExpanded]   = useState({})
   const [expForm,      setExpForm]      = useState({ date:new Date().toISOString().slice(0,10), category:"kitchen", description:"", amount:"", payment_method:"Cash", notes:"" })
   const [expDetailModal, setExpDetailModal] = useState(null)
+  const [poDetailModal,  setPoDetailModal]  = useState(null)
   const [expCoa,       setExpCoa]       = useState([])
   const [expLines,     setExpLines]     = useState([{ coa_id:"", coa_name:"", description:"", amount:"" }])
   const [expAkunAsal,  setExpAkunAsal]  = useState("")
@@ -674,7 +676,8 @@ export default function Accounting() {
                     .map(({catId, amount}) => {
                       const cat = EXPENSE_CATEGORIES.find(c=>c.id===catId) || { icon:"📦", label:catId }
                       return (
-                        <tr key={p.id+"-"+catId} style={{ background:"#FFFBF0" }}>
+                        <tr key={p.id+"-"+catId} onClick={()=>setPoDetailModal(p)} style={{ background:"#FFFBF0", cursor:"pointer" }}
+                          onMouseEnter={ev=>ev.currentTarget.style.background="#FFF3D6"} onMouseLeave={ev=>ev.currentTarget.style.background="#FFFBF0"}>
                           <td style={{ fontSize:12 }}>{p.date}</td>
                           <td><span style={{ fontSize:11,fontWeight:700,padding:"2px 8px",borderRadius:10,background:"#FFF7E6",color:"#FF8B00" }}>{cat.icon} {cat.label}</span></td>
                           <td style={{ fontSize:12 }}>{p.supplierName||p.supplier_name} — {p.invoiceNo||p.invoice_no||"PO"}</td>
@@ -1420,6 +1423,77 @@ export default function Accounting() {
           </div>
         </div>
       )}
+
+      {/* PO Detail Modal — read-only view of what a Purchase Order actually contained,
+          since the Pengeluaran listing now shows one row per category a PO touches
+          rather than the whole PO, this is the place to see the full item breakdown. */}
+      {poDetailModal && (() => {
+        const po = poDetailModal
+        const items = po.items || po.po_items || []
+        return (
+        <div className="bo-overlay" onMouseDown={e=>e.target===e.currentTarget&&setPoDetailModal(null)}>
+          <div className="bo-modal" style={{ maxWidth:700, maxHeight:"94vh", display:"flex", flexDirection:"column" }}>
+            <div className="bo-modal-header">
+              <div>
+                <div className="bo-modal-title">Detail Purchase Order</div>
+                <div style={{ fontSize:11, color:"var(--ink5)" }}>{po.invoiceNo||po.invoice_no||"—"}</div>
+              </div>
+              <button className="bo-modal-close" onClick={()=>setPoDetailModal(null)}>x</button>
+            </div>
+            <div className="bo-modal-body" style={{ overflowY:"auto", flex:1 }}>
+
+              <div style={{ background:"#fff", borderRadius:12, border:"1px solid #E8ECF0", padding:"16px 18px", marginBottom:14 }}>
+                <div style={{ display:"grid", gridTemplateColumns:"130px 1fr", gap:"8px 16px", fontSize:13 }}>
+                  <span style={{ color:"var(--ink4)", fontWeight:600 }}>Supplier</span><span>{po.supplierName||po.supplier_name||"—"}</span>
+                  <span style={{ color:"var(--ink4)", fontWeight:600 }}>No Invoice</span><span style={{ fontFamily:"monospace", fontWeight:700 }}>{po.invoiceNo||po.invoice_no||"—"}</span>
+                  <span style={{ color:"var(--ink4)", fontWeight:600 }}>Tanggal</span><span>{po.date}</span>
+                  <span style={{ color:"var(--ink4)", fontWeight:600 }}>Total</span><span style={{ fontWeight:700 }}>{fmt(po.total)}</span>
+                </div>
+              </div>
+
+              <div style={{ background:"#fff", borderRadius:12, border:"1px solid #E8ECF0", padding:"16px 18px" }}>
+                <div style={{ fontSize:13, fontWeight:800, marginBottom:12 }}>Item Dibeli</div>
+                <table style={{ width:"100%", borderCollapse:"collapse" }}>
+                  <thead>
+                    <tr style={{ background:"#F8FAFC" }}>
+                      {["NAMA","QTY","KATEGORI","JUMLAH"].map(h=>(
+                        <th key={h} style={{ padding:"8px 12px", textAlign:"left", fontSize:11, fontWeight:700, color:"var(--ink4)", borderBottom:"1px solid #E8ECF0" }}>{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {items.map((item,i) => {
+                      const ingCat = ingredientCatById[item.ingredient_id]
+                      const expCat = SUPPLY_CATEGORY_TO_EXPENSE_CAT[ingCat] || "bahan_baku"
+                      const cat = EXPENSE_CATEGORIES.find(c=>c.id===expCat) || { icon:"📦", label:expCat }
+                      return (
+                        <tr key={i} style={{ borderBottom:"1px solid #F0F4F8" }}>
+                          <td style={{ padding:"9px 12px", fontSize:13 }}>{item.name||"—"}</td>
+                          <td style={{ padding:"9px 12px", fontSize:12, color:"var(--ink4)" }}>{item.qty} {item.unit}</td>
+                          <td style={{ padding:"9px 12px", fontSize:11 }}>
+                            <span style={{ fontWeight:700,padding:"2px 8px",borderRadius:10,background:"#FFF7E6",color:"#FF8B00" }}>{cat.icon} {cat.label}</span>
+                          </td>
+                          <td style={{ padding:"9px 12px", fontSize:13, fontWeight:700 }}>{fmt(item.total_cost)}</td>
+                        </tr>
+                      )
+                    })}
+                    {items.length===0 && <tr><td colSpan={4} style={{ textAlign:"center", color:"var(--ink5)", padding:"24px 0" }}>Tidak ada detail item</td></tr>}
+                    <tr style={{ background:"#F8FAFC" }}>
+                      <td colSpan={3} style={{ padding:"10px 12px", fontSize:13, fontWeight:800 }}>Total</td>
+                      <td style={{ padding:"10px 12px", fontSize:14, fontWeight:900, color:"var(--brand)" }}>{fmt(po.total)}</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+
+            </div>
+            <div className="bo-modal-footer">
+              <button onClick={()=>setPoDetailModal(null)} className="bo-btn bo-btn-ghost">Tutup</button>
+            </div>
+          </div>
+        </div>
+        )
+      })()}
 
       {/* Kas Bon Modal */}
       {kasBonModal && (
