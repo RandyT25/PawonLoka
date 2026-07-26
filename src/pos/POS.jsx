@@ -282,6 +282,19 @@ export default function POS() {
     return () => { clearTimeout(debounceTimer); supabase.removeChannel(ch) }
   }, [])
 
+  // Live order sync — the floor plan's occupancy cache is per-device (IndexedDB), so
+  // voiding/paying/opening a bill from a *different* device (backoffice, another POS
+  // terminal) never invalidated it locally. Without this, a table could keep showing
+  // as occupied by an order that was already removed elsewhere, until whatever staff
+  // did next on this device happened to clear the cache — this keeps every session's
+  // occupancy cache honest regardless of which device changed the order.
+  useEffect(() => {
+    const ch = supabase.channel('pos_orders_sync')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'orders' }, () => invalidateFloorPlanCache())
+      .subscribe()
+    return () => { supabase.removeChannel(ch) }
+  }, [])
+
   async function restoreShift() {
     const today = new Date().toISOString().slice(0, 10)
     // Close any stale open shifts from previous days (all staff)
