@@ -45,6 +45,13 @@ export default function Orders() {
   const [staleLoading,  setStaleLoading]  = useState(false)
   const [bulkVoiding,   setBulkVoiding]   = useState(false)
 
+  async function releaseTable(table, tableArea) {
+    if (!table) return
+    let q = supabase.from("tables").update({ status: "Available", open_bill_id: null }).eq("name", table)
+    if (tableArea) q = q.eq("area", tableArea)
+    await q
+  }
+
   async function openStaleCleanup() {
     setShowStaleModal(true)
     setStaleLoading(true)
@@ -64,6 +71,7 @@ export default function Orders() {
       void_reason: "Auto-voided: stale open bill from a previous day, never closed",
       voided_by: "Backoffice (bulk cleanup)",
     }).in("id", ids)
+    await Promise.all(staleOpen.map(o => releaseTable(o.table, o.table_area)))
     await supabase.from("audit_logs").insert({
       action: "void", module: "orders", user_name: "Backoffice",
       details: JSON.stringify({ bulk: true, count: ids.length, order_ids: ids }),
@@ -83,6 +91,7 @@ export default function Orders() {
       void_reason: fullReason,
       voided_by: "Backoffice",
     }).eq("id", voidModal.id)
+    await releaseTable(voidModal.table, voidModal.table_area)
     supabase.from("audit_logs").insert({
       action: "void",
       module: "orders",
@@ -353,7 +362,7 @@ export default function Orders() {
               {selected.status?.toLowerCase() === "paid" && (
                 <button onClick={()=>sendWA(selected)} className="bo-btn bo-btn-primary">WA Receipt</button>
               )}
-              {selected.status?.toLowerCase() === "paid" && (
+              {["paid","open"].includes(selected.status?.toLowerCase()) && (
                 <button onClick={()=>{ setVoidModal(selected); setVoidReason(""); setVoidNote("") }}
                   className="bo-btn bo-btn-danger">Void Order</button>
               )}
