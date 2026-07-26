@@ -14,11 +14,14 @@ function sendWA(order) {
 }
 
 const STATUS_COLORS = {
-  paid:      { bg:"#DCFCE7", color:"#16A34A" },
-  open:      { bg:"#FEF9C3", color:"#CA8A04" },
+  Paid:      { bg:"#DCFCE7", color:"#16A34A" },
+  Open:      { bg:"#FEF9C3", color:"#CA8A04" },
+  Voided:    { bg:"#FEE2E2", color:"#DC2626" },
   void:      { bg:"#FEE2E2", color:"#DC2626" },
-  cancelled: { bg:"#FEE2E2", color:"#DC2626" },
+  Refunded:  { bg:"#FEE2E2", color:"#DC2626" },
+  Cancelled: { bg:"#FEE2E2", color:"#DC2626" },
 }
+const VOID_STATUSES = ["Voided","void","Refunded","Cancelled"]
 
 function todayStr() { return new Date().toISOString().slice(0,10) }
 
@@ -37,13 +40,46 @@ export default function Orders() {
   const [voidReason,   setVoidReason]   = useState("")
   const [voidNote,     setVoidNote]     = useState("")
   const [voiding,      setVoiding]      = useState(false)
+  const [staleOpen,     setStaleOpen]     = useState([])
+  const [showStaleModal,setShowStaleModal]= useState(false)
+  const [staleLoading,  setStaleLoading]  = useState(false)
+  const [bulkVoiding,   setBulkVoiding]   = useState(false)
+
+  async function openStaleCleanup() {
+    setShowStaleModal(true)
+    setStaleLoading(true)
+    const { data } = await supabase.from("orders").select("*")
+      .eq("status", "Open").lt("date", todayStr())
+      .order("date", { ascending: true })
+    setStaleOpen(data || [])
+    setStaleLoading(false)
+  }
+
+  async function bulkVoidStale() {
+    if (staleOpen.length === 0) return
+    setBulkVoiding(true)
+    const ids = staleOpen.map(o => o.id)
+    await supabase.from("orders").update({
+      status: "Voided",
+      void_reason: "Auto-voided: stale open bill from a previous day, never closed",
+      voided_by: "Backoffice (bulk cleanup)",
+    }).in("id", ids)
+    await supabase.from("audit_logs").insert({
+      action: "void", module: "orders", user_name: "Backoffice",
+      details: JSON.stringify({ bulk: true, count: ids.length, order_ids: ids }),
+    }).catch(() => {})
+    setBulkVoiding(false)
+    setShowStaleModal(false)
+    setStaleOpen([])
+    await load()
+  }
 
   async function doVoidOrder() {
     if (!voidReason) return
     setVoiding(true)
     const fullReason = voidNote ? voidReason + ": " + voidNote : voidReason
     await supabase.from("orders").update({
-      status: "void",
+      status: "Voided",
       void_reason: fullReason,
       voided_by: "Backoffice",
     }).eq("id", voidModal.id)
@@ -80,7 +116,7 @@ export default function Orders() {
   }
 
   const filtered = orders.filter(o => {
-    const matchStatus = statusFilter === "all" || o.status === statusFilter
+    const matchStatus = statusFilter === "all" || (statusFilter === "Voided" ? VOID_STATUSES.includes(o.status) : o.status === statusFilter)
     const matchSearch = !search ||
       o.id?.toLowerCase().includes(search.toLowerCase()) ||
       o.staff?.toLowerCase().includes(search.toLowerCase()) ||
@@ -89,7 +125,7 @@ export default function Orders() {
     return matchStatus && matchSearch
   })
 
-  const paidOrders   = filtered.filter(o => o.status === "paid")
+  const paidOrders   = filtered.filter(o => o.status === "Paid")
   const totalRevenue = paidOrders.reduce((s,o) => s + (o.total||0), 0)
   const totalOrders  = paidOrders.length
   const avgOrder     = totalOrders ? totalRevenue / totalOrders : 0
@@ -157,7 +193,7 @@ export default function Orders() {
           <input placeholder="Search order, staff, customer, table..." value={search}
             onChange={e=>setSearch(e.target.value)} className="bo-input" style={{ flex:1, minWidth:200 }} />
           <div style={{ display:"flex", gap:6 }}>
-            {["all","paid","open","void"].map(s => (
+            {["all","Paid","Open","Voided"].map(s => (
               <button key={s} onClick={()=>setStatusFilter(s)}
                 className={"bo-btn " + (statusFilter===s?"bo-btn-primary":"bo-btn-ghost")}
                 style={{ textTransform:"capitalize", padding:"6px 14px" }}>{s}</button>
@@ -166,6 +202,9 @@ export default function Orders() {
           <button onClick={load} className="bo-btn bo-btn-ghost">Refresh</button>
           <button onClick={exportExcel} disabled={exporting||filtered.length===0} className="bo-btn bo-btn-ghost" style={{ color:"#16A34A", borderColor:"#16A34A" }}>
             {exporting ? "Exporting..." : "Export Excel"}
+          </button>
+          <button onClick={openStaleCleanup} className="bo-btn bo-btn-ghost" style={{ color:"#DC2626", borderColor:"#DC2626" }}>
+            🧹 Cleanup Stale Open Bills
           </button>
         </div>
       </div>
@@ -311,10 +350,10 @@ export default function Orders() {
             </div>
             <div className="bo-modal-footer">
               <button onClick={()=>setSelected(null)} className="bo-btn bo-btn-ghost">Close</button>
-              {selected.status === "paid" && (
+              {selected.status === "Paid" && (
                 <button onClick={()=>sendWA(selected)} className="bo-btn bo-btn-primary">WA Receipt</button>
               )}
-              {selected.status === "paid" && (
+              {selected.status === "Paid" && (
                 <button onClick={()=>{ setVoidModal(selected); setVoidReason(""); setVoidNote("") }}
                   className="bo-btn bo-btn-danger">Void Order</button>
               )}
@@ -352,6 +391,45 @@ export default function Orders() {
               <button onClick={doVoidOrder} disabled={!voidReason||voiding} className="bo-btn bo-btn-danger">
                 {voiding?"Memproses...":"Konfirmasi Void"}
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Stale open bills cleanup modal */}
+      {showStaleModal && (
+        <div className="bo-overlay" onMouseDown={e=>e.target===e.currentTarget&&!bulkVoiding&&setShowStaleModal(false)}>
+          <div className="bo-modal" style={{ maxWidth:560 }}>
+            <div className="bo-modal-header">
+              <div className="bo-modal-title" style={{ color:"#DC2626" }}>Cleanup Stale Open Bills</div>
+              <button className="bo-modal-close" onClick={()=>setShowStaleModal(false)}>✕</button>
+            </div>
+            <div className="bo-modal-body">
+              {staleLoading ? (
+                <div style={{ textAlign:"center", padding:30, color:"var(--ink4)" }}>Memuat...</div>
+              ) : staleOpen.length === 0 ? (
+                <div style={{ textAlign:"center", padding:30, color:"var(--ink4)" }}>Tidak ada open bill lama yang tertinggal. 🎉</div>
+              ) : (<>
+                <div style={{ background:"#FEF2F2", borderRadius:8, padding:"10px 12px", marginBottom:14, fontSize:13, color:"#DC2626" }}>
+                  ⚠ {staleOpen.length} order masih berstatus "Open" dari hari sebelumnya (tidak pernah dibayar/ditutup). Ini akan di-void — tidak akan masuk laporan penjualan, dan tidak bisa dikembalikan.
+                </div>
+                <div style={{ maxHeight:280, overflowY:"auto", border:"1px solid #E8ECF0", borderRadius:8 }}>
+                  {staleOpen.map(o => (
+                    <div key={o.id} style={{ display:"flex", justifyContent:"space-between", padding:"8px 12px", borderBottom:"1px solid #F0F4F8", fontSize:12 }}>
+                      <span>{o.date} · {o.table||o.order_type||"-"} · {o.staff||"-"}</span>
+                      <span style={{ fontWeight:700 }}>{fmt(o.total)}</span>
+                    </div>
+                  ))}
+                </div>
+              </>)}
+            </div>
+            <div className="bo-modal-footer">
+              <button onClick={()=>setShowStaleModal(false)} className="bo-btn bo-btn-ghost" disabled={bulkVoiding}>Batal</button>
+              {staleOpen.length > 0 && (
+                <button onClick={bulkVoidStale} disabled={bulkVoiding||staleLoading} className="bo-btn bo-btn-danger">
+                  {bulkVoiding ? "Memproses..." : `Void Semua (${staleOpen.length})`}
+                </button>
+              )}
             </div>
           </div>
         </div>
