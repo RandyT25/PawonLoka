@@ -289,6 +289,13 @@ export default function POS() {
       .update({ clock_out: 'auto-closed' })
       .is('clock_out', null)
       .neq('date', today)
+    // Void any bills left open from previous days — the floor plan only checks
+    // today's orders, so a never-closed bill would otherwise sit invisible
+    // forever instead of freeing up its table for new orders.
+    await supabase.from('orders')
+      .update({ status: 'void', void_reason: 'Auto-voided: stale open bill from a previous day, never closed', voided_by: 'System' })
+      .eq('status', 'Open')
+      .neq('date', today)
     // Find the single active shift for today (shared across all staff)
     const { data } = await supabase
       .from('shifts')
