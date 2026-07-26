@@ -56,7 +56,7 @@ export default function Orders() {
     setShowStaleModal(true)
     setStaleLoading(true)
     const { data } = await supabase.from("orders").select("*")
-      .eq("status", "Open").lt("date", todayStr())
+      .eq("status", "Open")
       .order("date", { ascending: true })
     setStaleOpen(data || [])
     setStaleLoading(false)
@@ -68,7 +68,7 @@ export default function Orders() {
     const ids = staleOpen.map(o => o.id)
     await supabase.from("orders").update({
       status: "void",
-      void_reason: "Auto-voided: stale open bill from a previous day, never closed",
+      void_reason: "Manual cleanup: unresolved open bill voided via backoffice review",
       voided_by: "Backoffice (bulk cleanup)",
     }).in("id", ids)
     await Promise.all(staleOpen.map(o => releaseTable(o.table, o.table_area)))
@@ -213,7 +213,7 @@ export default function Orders() {
             {exporting ? "Exporting..." : "Export Excel"}
           </button>
           <button onClick={openStaleCleanup} className="bo-btn bo-btn-ghost" style={{ color:"#DC2626", borderColor:"#DC2626" }}>
-            🧹 Cleanup Stale Open Bills
+            🧹 Cleanup Open Bills
           </button>
         </div>
       </div>
@@ -410,17 +410,17 @@ export default function Orders() {
         <div className="bo-overlay" onMouseDown={e=>e.target===e.currentTarget&&!bulkVoiding&&setShowStaleModal(false)}>
           <div className="bo-modal" style={{ maxWidth:560 }}>
             <div className="bo-modal-header">
-              <div className="bo-modal-title" style={{ color:"#DC2626" }}>Cleanup Stale Open Bills</div>
+              <div className="bo-modal-title" style={{ color:"#DC2626" }}>Cleanup Open Bills</div>
               <button className="bo-modal-close" onClick={()=>setShowStaleModal(false)}>✕</button>
             </div>
             <div className="bo-modal-body">
               {staleLoading ? (
                 <div style={{ textAlign:"center", padding:30, color:"var(--ink4)" }}>Memuat...</div>
               ) : staleOpen.length === 0 ? (
-                <div style={{ textAlign:"center", padding:30, color:"var(--ink4)" }}>Tidak ada open bill lama yang tertinggal. 🎉</div>
+                <div style={{ textAlign:"center", padding:30, color:"var(--ink4)" }}>Tidak ada open bill yang tertinggal. 🎉</div>
               ) : (<>
                 <div style={{ background:"#FEF2F2", borderRadius:8, padding:"10px 12px", marginBottom:14, fontSize:13, color:"#DC2626" }}>
-                  ⚠ {staleOpen.length} order masih berstatus "Open" dari hari sebelumnya (tidak pernah dibayar/ditutup). Ini akan di-void — tidak akan masuk laporan penjualan, dan tidak bisa dikembalikan.
+                  ⚠ {staleOpen.length} order masih berstatus "Open" (termasuk hari ini) — periksa dulu sebelum void, karena tagihan meja yang sedang aktif juga akan muncul di sini. Setelah di-void, tidak akan masuk laporan penjualan dan tidak bisa dikembalikan.
                 </div>
                 <div style={{ maxHeight:280, overflowY:"auto", border:"1px solid #E8ECF0", borderRadius:8 }}>
                   {staleOpen.map(o => (
