@@ -216,6 +216,13 @@ body{font-family:"Inter",system-ui,sans-serif;font-size:14px;-webkit-font-smooth
   .po-item-row { display: flex !important; flex-direction: column !important; gap: 8px !important; background: var(--surface) !important; border: 1px solid var(--surface3) !important; border-radius: var(--r) !important; padding: 12px !important; margin-bottom: 10px !important; }
   .po-item-row > * { width: 100% !important; }
 
+  /* Pengeluaran (expense) modal — stack fixed-width grids instead of overflowing */
+  .bo-exp-info-grid { grid-template-columns: 1fr !important; }
+  .bo-exp-daterow { grid-template-columns: 1fr !important; }
+  .bo-exp-lineitem-header { display: none !important; }
+  .bo-exp-lineitem { grid-template-columns: 1fr !important; gap: 6px !important; background: var(--surface) !important; border: 1px solid var(--surface3) !important; border-radius: var(--r) !important; padding: 12px !important; }
+  .bo-exp-lineitem > * { width: 100% !important; min-width: 0 !important; }
+
   /* Recipe editor */
   div[style*="height:calc(100vh"] { height: auto !important; flex-direction: column !important; }
 }

@@ -23,6 +23,23 @@ const EXPENSE_CATEGORIES = [
   { id:"lain",            label:"Lain-lain",           icon:"📦", auto:false },
 ]
 
+// Maps an ingredient's category (from Inventory > Ingredients/Supplies) to a P&L
+// expense-category id, so Purchase Order spending can be split by what was actually
+// bought instead of always landing in one flat "Bahan Baku" bucket. Only non-food
+// "supply" categories are listed — any category not listed here (every real food/
+// ingredient category, or an ingredient that's missing/deleted) falls through to
+// "bahan_baku", the existing raw-ingredient bucket.
+const SUPPLY_CATEGORY_TO_EXPENSE_CAT = {
+  "Kitchen Tools & Utensils": "kitchen",
+  "Charcoal":                 "kitchen",
+  "Packaging":                "kitchen",
+  "Disposables":              "kitchen",
+  "Cleaning & Sanitation":    "floor_cleaning",
+  "Trash & Vacuum Bags":      "floor_cleaning",
+  "Office & Stationery":      "lain",
+  "Other Supplies":           "lain",
+}
+
 const STAFF_LIST  = ["Claudy","Nita","Aisyah","Mahes","Meldy","Oji","Yudi","Alin"]
 
 // Generate last 24 months up to current month — never hardcode year
@@ -51,6 +68,7 @@ export default function Accounting() {
   const [orders,       setOrders]       = useState([])
   const [expenses,     setExpenses]     = useState([])
   const [pos,          setPos]          = useState([]) // purchase orders
+  const [ingredients,  setIngredients]  = useState([])
   const [staff,        setStaff]        = useState([])
   const [kasBonList,   setKasBonList]   = useState([])
   const [openingBal,   setOpeningBal]   = useState(() => ({ id: new Date().toISOString().slice(0,7), amount:300000 }))
@@ -129,13 +147,14 @@ export default function Accounting() {
     const from = `${y}-${m}-01`
     const to   = new Date(parseInt(y), parseInt(m), 0).toISOString().slice(0,10)
 
-    const [ordRes, expRes, poRes, staffRes, kbRes, obRes] = await Promise.all([
+    const [ordRes, expRes, poRes, staffRes, kbRes, obRes, ingRes] = await Promise.all([
       supabase.from("orders").select("*").eq("status","Paid").gte("created_at",from+"T00:00:00+08:00").lte("created_at",to+"T23:59:59+08:00"),
       supabase.from("expenses").select("*").gte("date",from).lte("date",to).order("date",{ascending:false}),
       supabase.from("purchase_orders").select("*").eq("status","Paid").gte("date",from).lte("date",to),
       supabase.from("staff").select("*"),
       supabase.from("kas_bon").select("*").order("date",{ascending:false}),
       supabase.from("opening_balance").select("*").eq("id",period).maybeSingle(),
+      supabase.from("ingredients").select("id,category"),
     ])
 
     setOrders(ordRes.data||[])
@@ -144,6 +163,7 @@ export default function Accounting() {
     setStaff(staffRes.data||[])
     setKasBonList(kbRes.data||[])
     setOpeningBal(obRes.data || { id:period, amount:300000 })
+    setIngredients(ingRes.data||[])
     setLoading(false)
   }
 
@@ -157,6 +177,45 @@ export default function Accounting() {
 
   // Auto expenses from POs
   const poTotal = pos.reduce((a,p)=>a+(p.total||0),0)
+
+  // Split PO spending by what was actually purchased (via each line item's ingredient
+  // category), instead of always lumping every PO into one flat "Bahan Baku" bucket.
+  // Falls back to "bahan_baku" for any line item whose ingredient is missing/deleted,
+  // or whose category has no mapping (i.e. every real food/ingredient category).
+  const ingredientCatById = useMemo(() => {
+    const m = {}
+    ingredients.forEach(i => { m[i.id] = i.category })
+    return m
+  }, [ingredients])
+
+  const poByCategory = useMemo(() => {
+    const buckets = {}
+    pos.forEach(p => {
+      const items = p.items || p.po_items || []
+      items.forEach(item => {
+        const ingCat = ingredientCatById[item.ingredient_id]
+        const expCat = SUPPLY_CATEGORY_TO_EXPENSE_CAT[ingCat] || "bahan_baku"
+        buckets[expCat] = (buckets[expCat]||0) + (item.total_cost||0)
+      })
+    })
+    return buckets
+  }, [pos, ingredientCatById])
+
+  const bahanBakuPO = poByCategory["bahan_baku"] || 0
+
+  // Per-PO category breakdown, for the itemized Pengeluaran listing — most POs are
+  // single-category in practice (one row), but a PO spanning multiple categories
+  // renders as one row per category so the catFilter pills work correctly against it.
+  function poCategoryBreakdown(po) {
+    const items = po.items || po.po_items || []
+    const buckets = {}
+    items.forEach(item => {
+      const ingCat = ingredientCatById[item.ingredient_id]
+      const expCat = SUPPLY_CATEGORY_TO_EXPENSE_CAT[ingCat] || "bahan_baku"
+      buckets[expCat] = (buckets[expCat]||0) + (item.total_cost||0)
+    })
+    return Object.entries(buckets).map(([catId,amount]) => ({ catId, amount }))
+  }
 
   // Auto salary expense
   const salaryTotal = staff.reduce((a,s)=>a+(s.salary||0),0)
@@ -199,7 +258,8 @@ export default function Accounting() {
 
   // Expenses by category for display
   function catTotal(catId) {
-    return manualExpenses.filter(e=>e.category===catId).reduce((a,e)=>a+(e.amount||0),0)
+    const manual = manualExpenses.filter(e=>e.category===catId).reduce((a,e)=>a+(e.amount||0),0)
+    return manual + (poByCategory[catId]||0)
   }
 
   async function loadExpCoa() {
@@ -295,6 +355,13 @@ export default function Accounting() {
     setKasBonList(prev=>prev.map(k=>k.id===id?{...k,status:"deducted"}:k))
   }
 
+  async function markKasBonDeductedBulk(ids) {
+    if (ids.length === 0) return
+    if (!window.confirm("Tandai " + ids.length + " kas bon sebagai dipotong?")) return
+    await supabase.from("kas_bon").update({ status:"deducted", deducted_date:new Date().toISOString().slice(0,10) }).in("id", ids)
+    setKasBonList(prev => prev.map(k => ids.includes(k.id) ? {...k, status:"deducted"} : k))
+  }
+
   function toggleKbExpand(staffName) { setKbExpanded(e => ({ ...e, [staffName]: !e[staffName] })) }
 
   async function saveOpeningBal(amount) {
@@ -309,7 +376,7 @@ export default function Accounting() {
       ["Penjualan Bersih", fmt(netRevenue)],
       ["HPP / COGS", fmt(totalCOGS)],
       ["Laba Kotor", fmt(grossProfit) + " (" + grossMargin + "%)"],
-      ["Bahan Baku (PO)", fmt(poTotal)],
+      ["Bahan Baku (PO)", fmt(bahanBakuPO)],
       ["Gaji Karyawan", fmt(salaryTotal)],
       ...EXPENSE_CATEGORIES.filter(c=>!c.auto).map(c=>[c.label, fmt(catTotal(c.id))]),
       ["Total Beban", fmt(totalOpex)],
@@ -350,7 +417,7 @@ export default function Accounting() {
             ["Pendapatan Bersih", netRevenue],
             ["COGS", totalCOGS],
             ["Laba Kotor", grossProfit],
-            ["Bahan Baku (PO)", poTotal],
+            ["Bahan Baku (PO)", bahanBakuPO],
             ["Gaji Karyawan", salaryTotal],
             ...EXPENSE_CATEGORIES.filter(c=>!c.auto).map(c=>[c.label, catTotal(c.id)]),
             ["Total Beban", totalOpex],
@@ -467,7 +534,7 @@ export default function Accounting() {
             <div className="bo-card">
               <div className="bo-card-title">Beban per Kategori</div>
               {[
-                ["🥩 Bahan Baku (PO)",poTotal],
+                ["🥩 Bahan Baku (PO)",bahanBakuPO],
                 ["👥 Gaji Karyawan",salaryTotal],
                 ...EXPENSE_CATEGORIES.filter(c=>!c.auto).map(c=>[c.icon+" "+c.label,catTotal(c.id)]),
               ].filter(([,v])=>v>0).map(([l,v])=>(
@@ -525,7 +592,7 @@ export default function Accounting() {
           <div style={{ marginBottom:16 }}>
             <div style={{ fontSize:11,fontWeight:800,color:"#FF8B00",textTransform:"uppercase",letterSpacing:"0.5px",marginBottom:8,paddingBottom:4,borderBottom:"2px solid #FF8B00" }}>BEBAN OPERASIONAL</div>
             {[
-              ["Bahan Baku (PO)",poTotal],
+              ["Bahan Baku (PO)",bahanBakuPO],
               ["Gaji Karyawan",salaryTotal],
               ...EXPENSE_CATEGORIES.filter(c=>!c.auto).map(c=>[c.label,catTotal(c.id)]),
               ["Total Beban",totalOpex],
@@ -600,17 +667,24 @@ export default function Accounting() {
             <table className="bo-table">
               <thead><tr><th>Tanggal</th><th>Kategori</th><th>Deskripsi</th><th>Metode</th><th>Jumlah</th><th></th></tr></thead>
               <tbody>
-                {/* Auto: POs */}
-                {(catFilter==="all"||catFilter==="bahan_baku") && catFilter!=="gaji" && pos.map(p=>(
-                  <tr key={p.id} style={{ background:"#FFFBF0" }}>
-                    <td style={{ fontSize:12 }}>{p.date}</td>
-                    <td><span style={{ fontSize:11,fontWeight:700,padding:"2px 8px",borderRadius:10,background:"#FFF7E6",color:"#FF8B00" }}>🥩 Bahan Baku</span></td>
-                    <td style={{ fontSize:12 }}>{p.supplierName||p.supplier_name} — {p.invoiceNo||p.invoice_no||"PO"}</td>
-                    <td style={{ fontSize:12,color:"#6B778C" }}>Auto</td>
-                    <td style={{ fontWeight:700 }}>{fmt(p.total)}</td>
-                    <td style={{ fontSize:11,color:"#6B778C" }}>auto</td>
-                  </tr>
-                ))}
+                {/* Auto: POs — split per category (most POs are single-category, so usually one row) */}
+                {catFilter!=="gaji" && pos.flatMap(p =>
+                  poCategoryBreakdown(p)
+                    .filter(({catId}) => catFilter==="all" || catFilter===catId)
+                    .map(({catId, amount}) => {
+                      const cat = EXPENSE_CATEGORIES.find(c=>c.id===catId) || { icon:"📦", label:catId }
+                      return (
+                        <tr key={p.id+"-"+catId} style={{ background:"#FFFBF0" }}>
+                          <td style={{ fontSize:12 }}>{p.date}</td>
+                          <td><span style={{ fontSize:11,fontWeight:700,padding:"2px 8px",borderRadius:10,background:"#FFF7E6",color:"#FF8B00" }}>{cat.icon} {cat.label}</span></td>
+                          <td style={{ fontSize:12 }}>{p.supplierName||p.supplier_name} — {p.invoiceNo||p.invoice_no||"PO"}</td>
+                          <td style={{ fontSize:12,color:"#6B778C" }}>Auto</td>
+                          <td style={{ fontWeight:700 }}>{fmt(amount)}</td>
+                          <td style={{ fontSize:11,color:"#6B778C" }}>auto</td>
+                        </tr>
+                      )
+                    })
+                )}
                 {/* Manual */}
                 {catFilter==="gaji" ? staff.map(s=>{
                     const kb = kasBonList.filter(k=>k.staff_name===s.name&&k.status==="outstanding").reduce((a,k)=>a+k.amount,0)
@@ -637,7 +711,7 @@ export default function Accounting() {
                     </tr>
                   )
                 })}
-                {catFilter!=="gaji" && filteredExp.length===0&&pos.length===0&&<tr><td colSpan={6} style={{ textAlign:"center",color:"var(--ink5)",padding:"32px 0" }}>No expenses yet</td></tr>}
+                {catFilter!=="gaji" && filteredExp.length===0 && pos.every(p=>poCategoryBreakdown(p).filter(({catId})=>catFilter==="all"||catFilter===catId).length===0) && <tr><td colSpan={6} style={{ textAlign:"center",color:"var(--ink5)",padding:"32px 0" }}>No expenses yet</td></tr>}
               </tbody>
             </table>
           </div>
@@ -683,7 +757,7 @@ export default function Accounting() {
               { label:"Saldo Awal",         masuk:fmt(openingBal.amount||0), keluar:null,          bold:false },
               { label:"Penjualan Cash",      masuk:fmt(cashIn),               keluar:null,          bold:false },
               { label:"Penjualan Non-Cash",  masuk:fmt(qrisIn),               keluar:null,          bold:false },
-              { label:"Bahan Baku (PO)",     masuk:null,  keluar:fmt(poTotal),                      bold:false },
+              { label:"Bahan Baku (PO)",     masuk:null,  keluar:fmt(bahanBakuPO),                  bold:false },
               { label:"Gaji Karyawan",       masuk:null,  keluar:fmt(salaryTotal),                  bold:false },
               ...EXPENSE_CATEGORIES.filter(c=>!c.auto&&catTotal(c.id)>0).map(c=>({ label:c.icon+" "+c.label, masuk:null, keluar:fmt(catTotal(c.id)), bold:false })),
               { label:"SALDO AKHIR",         masuk:fmt((openingBal.amount||0)+cashIn+qrisIn), keluar:fmt(cashOut), bold:true },
@@ -839,6 +913,7 @@ export default function Accounting() {
                     )
                   }
                   const isOpen = !!kbExpanded[g.staff_name]
+                  const outstandingIds = g.entries.filter(k=>k.status==="outstanding").map(k=>k.id)
                   return (
                     <Fragment key={g.staff_name}>
                       <tr onClick={()=>toggleKbExpand(g.staff_name)} style={{ cursor:"pointer", background:"var(--surface)" }}>
@@ -848,7 +923,13 @@ export default function Accounting() {
                         </td>
                         <td style={{ fontWeight:700,color:"#DE350B" }}>{fmt(g.total)}</td>
                         <td colSpan={2} style={{ fontSize:12, color:"var(--ink4)" }}>{g.entries.length} entries</td>
-                        <td></td>
+                        <td>
+                          {outstandingIds.length > 0 && (
+                            <button onClick={(e)=>{ e.stopPropagation(); markKasBonDeductedBulk(outstandingIds) }} className="bo-btn bo-btn-ghost bo-btn-sm">
+                              Tandai Semua Dipotong
+                            </button>
+                          )}
+                        </td>
                       </tr>
                       {isOpen && g.entries.map(k=>(
                         <tr key={k.id} style={{ background:"var(--surface)" }}>
@@ -1091,19 +1172,19 @@ export default function Accounting() {
               {/* Header info */}
               <div style={{ background:"#fff", borderRadius:12, border:"1px solid #E8ECF0", padding:"16px 18px", marginBottom:14 }}>
                 <div style={{ fontSize:13, fontWeight:800, marginBottom:14, color:"var(--ink1)" }}>Informasi Pengeluaran Kas & Bank</div>
-                <div style={{ display:"grid", gridTemplateColumns:"130px 1fr", gap:"10px 16px", alignItems:"start" }}>
+                <div className="bo-exp-info-grid" style={{ display:"grid", gridTemplateColumns:"130px 1fr", gap:"10px 16px", alignItems:"start" }}>
 
                   <label style={{ fontSize:13, fontWeight:600, paddingTop:8 }}>Outlet</label>
-                  <input className="bo-input" value="PawonLoka" disabled style={{ background:"#F4F5F7" }} />
+                  <input className="bo-input" value="PawonLoka" disabled style={{ background:"#F4F5F7", minWidth:0 }} />
 
                   <label style={{ fontSize:13, fontWeight:600, paddingTop:8 }}>No Transaksi</label>
-                  <div>
-                    <input className="bo-input" value={expTransNo} onChange={e=>setExpTransNo(e.target.value)} placeholder="BKK-00001" />
+                  <div style={{ minWidth:0 }}>
+                    <input className="bo-input" style={{ minWidth:0 }} value={expTransNo} onChange={e=>setExpTransNo(e.target.value)} placeholder="BKK-00001" />
                     <div style={{ fontSize:11, color:"var(--ink5)", marginTop:3 }}>Terisi otomatis jika dikosongkan</div>
                   </div>
 
                   <label style={{ fontSize:13, fontWeight:600, paddingTop:8 }}>Akun Asal</label>
-                  <select className="bo-select" value={expAkunAsal} onChange={e=>setExpAkunAsal(e.target.value)}>
+                  <select className="bo-select" style={{ minWidth:0 }} value={expAkunAsal} onChange={e=>setExpAkunAsal(e.target.value)}>
                     <option value="">Pilih akun sumber dana</option>
                     {expCoa.filter(a=>a.category==="Kas & Bank").map(a=>(
                       <option key={a.id} value={a.code}>{a.code} - {a.name}</option>
@@ -1111,9 +1192,9 @@ export default function Accounting() {
                   </select>
 
                   <label style={{ fontSize:13, fontWeight:600, paddingTop:8 }}>Tanggal Transaksi</label>
-                  <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:8 }}>
-                    <input type="date" className="bo-input" value={expForm.date} onChange={e=>setExpForm(f=>({...f,date:e.target.value}))} />
-                    <input type="time" className="bo-input" value={expTime} onChange={e=>setExpTime(e.target.value)} />
+                  <div className="bo-exp-daterow" style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:8 }}>
+                    <input type="date" className="bo-input" style={{ minWidth:0 }} value={expForm.date} onChange={e=>setExpForm(f=>({...f,date:e.target.value}))} />
+                    <input type="time" className="bo-input" style={{ minWidth:0 }} value={expTime} onChange={e=>setExpTime(e.target.value)} />
                   </div>
 
                 </div>
@@ -1135,19 +1216,19 @@ export default function Accounting() {
                   </div>
                 ) : (
                   <div>
-                    <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 160px 32px", gap:8, marginBottom:6, padding:"0 4px" }}>
+                    <div className="bo-exp-lineitem-header" style={{ display:"grid", gridTemplateColumns:"1fr 1fr 160px 32px", gap:8, marginBottom:6, padding:"0 4px" }}>
                       {["NAMA AKUN","DESKRIPSI","JUMLAH",""].map(h=>(
                         <div key={h} style={{ fontSize:10, fontWeight:700, color:"var(--ink4)", textTransform:"uppercase" }}>{h}</div>
                       ))}
                     </div>
                     <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
                       {expLines.filter(l=>l.coa_id).map((line)=>(
-                        <div key={line.coa_id} style={{ display:"grid", gridTemplateColumns:"1fr 1fr 160px 32px", gap:8, alignItems:"center" }}>
-                          <div style={{ fontSize:13, fontWeight:600, color:"var(--ink1)", padding:"8px 0" }}>{line.coa_name}</div>
-                          <input className="bo-input" style={{ fontSize:12 }}
+                        <div key={line.coa_id} className="bo-exp-lineitem" style={{ display:"grid", gridTemplateColumns:"1fr 1fr 160px 32px", gap:8, alignItems:"center" }}>
+                          <div style={{ fontSize:13, fontWeight:600, color:"var(--ink1)", padding:"8px 0", minWidth:0 }}>{line.coa_name}</div>
+                          <input className="bo-input" style={{ fontSize:12, minWidth:0 }}
                             value={line.description} placeholder="Contoh: Deskripsi"
                             onChange={e=>setExpLines(prev=>prev.map((l)=>l.coa_id===line.coa_id?{...l,description:e.target.value}:l))} />
-                          <input type="text" className="bo-input" style={{ fontSize:12 }}
+                          <input type="text" className="bo-input" style={{ fontSize:12, minWidth:0 }}
                             value={line.amount ? "Rp "+Number(line.amount).toLocaleString("id-ID") : ""}
                             placeholder="Rp 0"
                             onChange={e=>{
@@ -1204,6 +1285,18 @@ export default function Accounting() {
                 onChange={e=>setCoaPickerSearch(e.target.value)}
                 placeholder="Cari ..."
                 autoFocus />
+              {(() => {
+                const q = coaPickerSearch.toLowerCase()
+                const filteredCoa = expCoa.filter(a => !q || a.name.toLowerCase().includes(q) || a.code.toLowerCase().includes(q) || (a.category||"").toLowerCase().includes(q))
+                if (filteredCoa.length === 0) {
+                  return (
+                    <div style={{ textAlign:"center", padding:"40px 0", color:"var(--ink5)" }}>
+                      <div style={{ fontSize:13, fontWeight:600 }}>Tidak ada akun ditemukan</div>
+                      <div style={{ fontSize:12, marginTop:4 }}>Coba kata kunci pencarian lain</div>
+                    </div>
+                  )
+                }
+                return (
               <table style={{ width:"100%", borderCollapse:"collapse" }}>
                 <thead>
                   <tr style={{ background:"#F8FAFC" }}>
@@ -1214,12 +1307,7 @@ export default function Accounting() {
                   </tr>
                 </thead>
                 <tbody>
-                  {expCoa
-                    .filter(a => {
-                      const q = coaPickerSearch.toLowerCase()
-                      return !q || a.name.toLowerCase().includes(q) || a.code.toLowerCase().includes(q) || (a.category||"").toLowerCase().includes(q)
-                    })
-                    .map(a=>(
+                  {filteredCoa.map(a=>(
                       <tr key={a.id} onClick={()=>{ const s=new Set(coaPickerSelected); s.has(a.id)?s.delete(a.id):s.add(a.id); setCoaPickerSelected(s) }}
                         style={{ borderBottom:"1px solid #F0F4F8", cursor:"pointer", background:coaPickerSelected.has(a.id)?"#F0F7FF":"" }}
                         onMouseEnter={e=>{ if(!coaPickerSelected.has(a.id)) e.currentTarget.style.background="#F8FAFC" }}
@@ -1239,6 +1327,8 @@ export default function Accounting() {
                   }
                 </tbody>
               </table>
+                )
+              })()}
             </div>
             <div className="bo-modal-footer" style={{ justifyContent:"space-between" }}>
               <div style={{ fontSize:12, color:"var(--ink4)" }}>{coaPickerSelected.size} akun dipilih</div>
