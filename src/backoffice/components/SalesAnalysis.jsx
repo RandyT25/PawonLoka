@@ -3,6 +3,7 @@ import { supabase } from "../../lib/supabase"
 import DateRangePicker, { buildDateRange } from "./DateRangePicker"
 import MultiItemSelect from "./MultiItemSelect"
 import { exportPDF, exportExcel, formatPeriodLabel, filenameSlug, fmtIDR } from "./exportUtils"
+import { explodeOrderPayments } from "../../shared/orderPricing"
 
 const fmt = n => "Rp " + Number(n || 0).toLocaleString("id-ID")
 const PAY_COLORS = { Cash:"#10B981", QRIS:"#0EA5E9", Card:"#1565C0", GoPay:"#00ADE0", OVO:"#8B5CF6", Other:"#94A3B8" }
@@ -60,7 +61,7 @@ export default function SalesAnalysis() {
     setSummary({ revenue, cogs, profit, orders:filteredOrders.length, avg, margin })
 
     const payMap = {}
-    filteredOrders.forEach(o => { const m = o.pay || "Other"; payMap[m] = (payMap[m] || 0) + (o.total || 0) })
+    filteredOrders.forEach(o => { explodeOrderPayments(o).forEach(({ method, amount }) => { payMap[method] = (payMap[method] || 0) + amount }) })
     setPayments(Object.entries(payMap)
       .map(([method, amount]) => ({ method, amount, pct: revenue ? Math.round(amount / revenue * 100) : 0 }))
       .sort((a, b) => b.amount - a.amount))

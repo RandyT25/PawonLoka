@@ -16,6 +16,9 @@ dist
 dist-ssr
 *.local
 
+# Secrets
+android/keystore.properties
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
