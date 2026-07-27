@@ -529,7 +529,7 @@ export default function Accounting() {
               ].map(([l,v,c])=>(
                 <div key={l} style={{ display:"flex",justifyContent:"space-between",padding:"8px 0",borderBottom:"1px solid var(--surface2)",fontSize:13 }}>
                   <span style={{ fontWeight:l==="LABA BERSIH"||l==="Laba Kotor"?800:500,color:"#0A1628" }}>{l}</span>
-                  <span style={{ fontWeight:700,color:c }}>{fmt(Math.abs(v))}{v<0?" (-)":""}</span>
+                  <span style={{ fontWeight:700,color:c }}>{fmt(v)}</span>
                 </div>
               ))}
             </div>
@@ -572,7 +572,7 @@ export default function Accounting() {
             {[["Penjualan Kotor",grossRevenue],["Diskon",-totalDiscount],["Penjualan Bersih",netRevenue]].map(([l,v])=>(
               <div key={l} style={{ display:"flex",justifyContent:"space-between",padding:"6px 0",fontSize:13,borderBottom:"1px solid var(--surface2)",fontWeight:l==="Penjualan Bersih"?800:400 }}>
                 <span style={{ paddingLeft:l==="Penjualan Bersih"?0:16,color:l==="Penjualan Bersih"?"#0052CC":"#0A1628" }}>{l}</span>
-                <span style={{ color:v<0?"#DE350B":"#0A1628" }}>{v<0?"("+fmt(Math.abs(v))+")":fmt(v)}</span>
+                <span style={{ color:v<0?"#DE350B":"#0A1628" }}>{fmt(v)}</span>
               </div>
             ))}
           </div>
