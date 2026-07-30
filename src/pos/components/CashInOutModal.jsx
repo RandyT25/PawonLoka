@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { supabase } from '../../lib/supabase'
 import { qr } from '../../lib/quickRead'
 import { dbWrite } from '../../shared/dbWrite'
@@ -18,6 +18,7 @@ export default function CashInOutModal({ staff, onClose }) {
   const [saving, setSaving] = useState(false)
   const [error, setError]   = useState('')
   const [tab, setTab]       = useState('add')
+  const submittingRef       = useRef(false)
 
   useEffect(() => { loadLogs() }, [])
 
@@ -28,8 +29,13 @@ export default function CashInOutModal({ staff, onClose }) {
   }
 
   async function handleSave() {
+    // Synchronous re-entrancy lock — `saving` state only disables the button
+    // after a re-render, which isn't fast enough to stop a double-tap on a
+    // touchscreen from firing this twice in the same tick.
+    if (submittingRef.current) return
     if (!amount || parseInt(amount) <= 0) { setError('Masukkan jumlah'); return }
     if (!reason.trim()) { setError('Masukkan keterangan'); return }
+    submittingRef.current = true
     setSaving(true)
     const now = new Date()
     const saved = await dbWrite('cash_logs', 'insert', {
@@ -39,7 +45,9 @@ export default function CashInOutModal({ staff, onClose }) {
       staff: staff.name,
       date: now.toISOString().slice(0, 10),
       time: now.toLocaleTimeString('id-ID', { hour:'2-digit', minute:'2-digit' }),
+      client_ref: crypto.randomUUID(),
     })
+    submittingRef.current = false
     if (!saved) { setError('Gagal simpan — cek koneksi dan coba lagi'); setSaving(false); return }
     setAmount(''); setReason(''); setError('')
     setSaving(false)

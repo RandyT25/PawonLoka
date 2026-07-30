@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { supabase } from '../../lib/supabase'
 import { fmt } from '../../shared/constants'
 import { qr } from '../../lib/quickRead'
@@ -17,6 +17,7 @@ export default function VoidModal({ onClose, managerPin = '9999' }) {
   const [refundAmount, setRefundAmount] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
+  const submittingRef = useRef(false)
 
   useEffect(() => { loadOrders() }, [])
 
@@ -51,11 +52,16 @@ export default function VoidModal({ onClose, managerPin = '9999' }) {
   }
 
   async function doVoid() {
+    // Synchronous re-entrancy lock — `loading` state only disables the button
+    // after a re-render, which isn't fast enough to stop a double-tap from
+    // firing this twice in the same tick.
+    if (submittingRef.current) return
     if (!reason.trim()) { setError('Masukkan alasan'); return }
     const amount = refundType === 'full' ? selected.total : parseFloat(refundAmount) || 0
     if (refundType === 'partial' && amount <= 0) { setError('Masukkan jumlah refund'); return }
     if (refundType === 'partial' && amount > selected.total) { setError('Melebihi total order'); return }
 
+    submittingRef.current = true
     setLoading(true)
     const newStatus = refundType === 'full' ? 'Voided' : 'Refunded'
     const saved = await dbWrite('orders', 'update', {
@@ -65,7 +71,7 @@ export default function VoidModal({ onClose, managerPin = '9999' }) {
       notes: (selected.notes || '') + ' | ' + newStatus.toUpperCase() + ': Rp' + amount + ' - ' + reason
     }, { id: selected.id })
 
-    if (!saved) { setError('Gagal — cek koneksi dan coba lagi'); setLoading(false); return }
+    if (!saved) { submittingRef.current = false; setError('Gagal — cek koneksi dan coba lagi'); setLoading(false); return }
 
     // Voiding/refunding a still-Open bill frees up its table — the floor plan's occupancy
     // cache needs invalidating or it'll keep showing the table as occupied by this order.
@@ -80,6 +86,7 @@ export default function VoidModal({ onClose, managerPin = '9999' }) {
         staff: 'Manager',
         date: new Date().toISOString().slice(0,10),
         time: new Date().toLocaleTimeString('id-ID',{hour:'2-digit',minute:'2-digit'}),
+        client_ref: crypto.randomUUID(),
       })
     }
 
@@ -91,6 +98,7 @@ export default function VoidModal({ onClose, managerPin = '9999' }) {
       details: JSON.stringify({ order_id: selected.id, reason, amount }),
     })
 
+    submittingRef.current = false
     setStep('done')
     setLoading(false)
   }
