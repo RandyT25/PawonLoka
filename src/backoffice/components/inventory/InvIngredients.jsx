@@ -211,15 +211,19 @@ export default function InvIngredients({ mode="ingredients" }) {
       ? "This ingredient still has a pending staff submission (stock count / production / waste / request) referencing it. Deleting it now will make that submission show \"ingredient deleted\" when reviewed. Delete anyway?"
       : "Delete this ingredient?"
     if (!confirm(warning)) return
-    // Cascade: delete sub_recipe_ingredients, sub_recipes, recipes linked to this ingredient.
-    // Check every step's error — a silent failure here (e.g. RLS, FK) would otherwise leave
-    // the ingredient live in the DB while the UI acts like it's gone.
+    // Cascade: delete sub_recipe_ingredients, sub_recipes, recipes, market_prices linked to
+    // this ingredient — market_prices has a real FK constraint (market_prices_ingredient_id_fkey)
+    // that blocks deleting the ingredient if left behind. Check every step's error — a silent
+    // failure here (e.g. RLS, FK) would otherwise leave the ingredient live in the DB while the
+    // UI acts like it's gone.
     const { error: sriErr } = await supabase.from("sub_recipe_ingredients").delete().eq("ingredient_id", id)
     if (sriErr) { alert("Failed to delete: "+sriErr.message); return }
     const { error: srErr } = await supabase.from("sub_recipes").delete().eq("ingredient_id", id)
     if (srErr) { alert("Failed to delete: "+srErr.message); return }
     const { error: recErr } = await supabase.from("recipes").delete().eq("ingredient_id", id)
     if (recErr) { alert("Failed to delete: "+recErr.message); return }
+    const { error: mpErr } = await supabase.from("market_prices").delete().eq("ingredient_id", id)
+    if (mpErr) { alert("Failed to delete: "+mpErr.message); return }
     const { error: ingErr } = await supabase.from("ingredients").delete().eq("id", id)
     if (ingErr) { alert("Failed to delete: "+ingErr.message); return }
     setIngredients(prev => prev.filter(i => i.id !== id))
