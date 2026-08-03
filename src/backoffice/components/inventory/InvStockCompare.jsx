@@ -2,18 +2,10 @@ import { useState, useEffect, useCallback, useRef, useMemo } from "react"
 import { supabase } from "../../../lib/supabase"
 import DateRangePicker, { buildDateRange } from "../DateRangePicker"
 import { exportExcel, exportPDF, formatPeriodLabel, filenameSlug, fmtIDR } from "../exportUtils"
+import { toBaseUnit as toBase } from "../../../shared/unitConversion"
 
 const fmt    = n => "Rp " + Number(n||0).toLocaleString("id-ID")
 const fmtQty = (n, unit) => Number(n||0).toLocaleString("id-ID", { maximumFractionDigits:2 }) + (unit ? " " + unit : "")
-
-function toBase(ing, qty, unit) {
-  if (!unit || unit === ing.unit) return qty
-  const convs = typeof ing.conversions === "string"
-    ? JSON.parse(ing.conversions || "[]")
-    : (ing.conversions || [])
-  const c = convs.find(c => c.unit === unit)
-  return c && c.qty ? qty * c.qty : qty
-}
 
 const STATUS_CFG = {
   out:  { label:"Habis",    bg:"#FFEBE6", color:"#DE350B" },

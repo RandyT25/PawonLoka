@@ -20,37 +20,45 @@ export default function useOfflineSync() {
     if (!queue.length) return
     syncingRef.current = true
     setSyncing(true)
-    for (const entry of queue) {
-      try {
-        if (entry.op === 'insert') {
-          const { error } = await supabase.from(entry.table).insert(entry.payload)
-          // Duplicate key errors mean it was already synced — treat as success
-          if (error && !error.message?.includes('duplicate')) throw error
-        } else if (entry.op === 'update') {
-          let q = supabase.from(entry.table).update(entry.payload)
-          if (entry.match) Object.entries(entry.match).forEach(([k, v]) => { q = q.eq(k, v) })
-          const { error } = await q
-          if (error) throw error
-        } else if (entry.op === 'delete') {
-          let q = supabase.from(entry.table).delete()
-          if (entry.match) Object.entries(entry.match).forEach(([k, v]) => { q = q.eq(k, v) })
-          const { error } = await q
-          if (error) throw error
-        } else if (entry.op === 'upsert') {
-          const { error } = await supabase.from(entry.table).upsert(entry.payload)
-          if (error) throw error
+    try {
+      for (const entry of queue) {
+        try {
+          // Hard 5s timeout, mirroring dbWrite.js — on "bad signal" wifi a
+          // request can hang instead of erroring, which would otherwise wedge
+          // syncingRef true forever and silently break both the 30s poll and
+          // every future "Sync Sekarang" click.
+          const timer = new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 5000))
+          if (entry.op === 'insert') {
+            const { error } = await Promise.race([supabase.from(entry.table).insert(entry.payload), timer])
+            // Duplicate key errors mean it was already synced — treat as success
+            if (error && !error.message?.includes('duplicate')) throw error
+          } else if (entry.op === 'update') {
+            let q = supabase.from(entry.table).update(entry.payload)
+            if (entry.match) Object.entries(entry.match).forEach(([k, v]) => { q = q.eq(k, v) })
+            const { error } = await Promise.race([q, timer])
+            if (error) throw error
+          } else if (entry.op === 'delete') {
+            let q = supabase.from(entry.table).delete()
+            if (entry.match) Object.entries(entry.match).forEach(([k, v]) => { q = q.eq(k, v) })
+            const { error } = await Promise.race([q, timer])
+            if (error) throw error
+          } else if (entry.op === 'upsert') {
+            const { error } = await Promise.race([supabase.from(entry.table).upsert(entry.payload), timer])
+            if (error) throw error
+          }
+          await offlineStore.dequeue(entry.id)
+        } catch(e) {
+          console.error('[sync] failed for entry', entry.table, entry.op, e)
+          // Keep it queued and quietly retry later — never surfaced to the cashier
+          // as an error. The attempt count is just diagnostic breadcrumb for
+          // whoever inspects IndexedDB later if something's genuinely stuck.
+          await offlineStore.updateEntry({ ...entry, attempts: (entry.attempts || 0) + 1 })
         }
-        await offlineStore.dequeue(entry.id)
-      } catch(e) {
-        console.error('[sync] failed for entry', entry.table, entry.op, e)
-        // Keep it queued and quietly retry later — never surfaced to the cashier
-        // as an error. The attempt count is just diagnostic breadcrumb for
-        // whoever inspects IndexedDB later if something's genuinely stuck.
-        await offlineStore.updateEntry({ ...entry, attempts: (entry.attempts || 0) + 1 })
       }
+    } finally {
+      syncingRef.current = false
+      setSyncing(false)
     }
-    syncingRef.current = false
-    setSyncing(false)
     await refreshCount()
   }, [refreshCount])
 

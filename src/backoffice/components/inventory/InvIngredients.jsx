@@ -167,6 +167,17 @@ export default function InvIngredients({ mode="ingredients" }) {
 
   async function save() {
     if (!form.name) return
+    // Warn on a conversion factor that's almost certainly wrong (e.g. "1 kg = 1 gr" instead of 1000) —
+    // this silently inflates WAC by orders of magnitude once a purchase is made in that unit.
+    const BIG_UNITS = ["kg","L","Galon","dus","karung","box","sack","pack","sachet","bungkus","botol","ikat"]
+    const SMALL_BASE_UNITS = ["gr","ml","pcs"]
+    const suspect = convs.find(c =>
+      BIG_UNITS.includes(c.unit) && SMALL_BASE_UNITS.includes(form.unit) && (parseFloat(c.qty)||0) <= 1
+    )
+    if (suspect) {
+      const ok = confirm(`1 ${suspect.unit} = ${suspect.qty} ${form.unit} — sepertinya salah (misal maksud Anda 1000?). Simpan juga?`)
+      if (!ok) return
+    }
     setSaving(true)
     const wac = wacFromConvs()
     const payload = {

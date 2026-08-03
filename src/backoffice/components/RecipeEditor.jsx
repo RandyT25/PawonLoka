@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback, useRef } from "react"
 import { supabase } from "../../lib/supabase"
 import { isFoodCategory } from "../lib/ingredientCategories"
+import { unitPriceFor } from "../../shared/unitConversion"
 
 const UNIT_TO_BASE = {
   gr:1,g:1,kg:1000,ml:1,mL:1,L:1000,Galon:19000,
@@ -198,7 +199,10 @@ function RecipePanel({ item, itemType, ingredients, subRecipes, onSaved, onCance
     const found = all.find(x => x.id === row.ingredient_id)
     const effectiveCost = found?.cost_per_unit || found?.market_cost || 0
     if (!effectiveCost) return sum
-    return sum + (effectiveCost / (UNIT_TO_BASE[found.yield_unit || found.unit]||1)) * toBase(row.qty, row.unit)
+    // Price per row.unit using the ingredient's own conversions[] (respects real pack/kg/etc
+    // sizes) rather than assuming every "pack"/"sachet"/etc is exactly 1 base unit.
+    const priceIng = { unit: found.yield_unit || found.unit, cost_per_unit: effectiveCost, conversions: found.conversions }
+    return sum + unitPriceFor(priceIng, row.unit) * (parseFloat(row.qty)||0)
   }, 0)
 
   const yieldBase   = toBase(yieldQty, yieldUnit)
@@ -327,7 +331,7 @@ function RecipePanel({ item, itemType, ingredients, subRecipes, onSaved, onCance
         {rows.map((row,i) => {
           const found = all.find(x=>x.id===row.ingredient_id)
           const effectiveCost = found?.cost_per_unit || found?.market_cost || 0
-          const cost  = effectiveCost ? (effectiveCost/(UNIT_TO_BASE[found.yield_unit || found.unit]||1))*toBase(row.qty,row.unit) : 0
+          const cost  = effectiveCost ? unitPriceFor({ unit: found.yield_unit || found.unit, cost_per_unit: effectiveCost, conversions: found.conversions }, row.unit) * (parseFloat(row.qty)||0) : 0
           const isEst = cost > 0 && !found?.cost_per_unit && found?.market_cost > 0
           return (
             <div key={i} className="recipe-ing-row" style={{ display:"grid", gridTemplateColumns:"1fr 100px 110px 110px 32px", gap:8, alignItems:"center" }}>
@@ -420,7 +424,7 @@ export default function RecipeEditor() {
     Promise.all([
       supabase.from("products").select("sku,name,icon,price,cogs,cat").order("name"),
       supabase.from("sub_recipes").select("id,name,unit,cost_per_unit,yield_qty,yield_unit,ingredient_id").order("name"),
-      supabase.from("ingredients").select("id,name,unit,cost_per_unit,category").order("name"),
+      supabase.from("ingredients").select("id,name,unit,cost_per_unit,category,conversions").order("name"),
       supabase.from("sub_recipe_ingredients").select("sub_recipe_id"),
       supabase.from("market_prices").select("ingredient_id,price,conv_qty").order("checked_at", { ascending: false }),
     ]).then(async ([pRes, sRes, iRes, sriRes, mpRes]) => {
@@ -490,14 +494,14 @@ export default function RecipeEditor() {
     const consignmentSkus = new Set(products.filter(p => p.category === "Consignment").map(p => p.id))
     const [recRes, iRes, srRes, mpRes] = await Promise.all([
       supabase.from("recipes").select("productSku,ingredient_id,qty,unit"),
-      supabase.from("ingredients").select("id,name,unit,cost_per_unit"),
+      supabase.from("ingredients").select("id,name,unit,cost_per_unit,conversions"),
       supabase.from("sub_recipes").select("id,unit,cost_per_unit"),
       supabase.from("market_prices").select("ingredient_id,price,conv_qty").order("checked_at", { ascending: false }),
     ])
     const mpMap = {}
     ;(mpRes.data || []).forEach(p => { if (!mpMap[p.ingredient_id]) mpMap[p.ingredient_id] = p.price / (p.conv_qty || 1) })
     const lookup = {}
-    ;(iRes.data || []).forEach(i => { lookup[i.id] = { unit: i.unit || "gr", cost_per_unit: i.cost_per_unit || 0, market_cost: mpMap[i.id] || 0 } })
+    ;(iRes.data || []).forEach(i => { lookup[i.id] = { unit: i.unit || "gr", cost_per_unit: i.cost_per_unit || 0, market_cost: mpMap[i.id] || 0, conversions: i.conversions } })
     ;(srRes.data || []).forEach(s => { lookup[s.id] = { unit: s.unit || "gr", cost_per_unit: s.cost_per_unit || 0, market_cost: 0 } })
     const byProduct = {}
     ;(recRes.data || []).forEach(r => {
@@ -512,7 +516,7 @@ export default function RecipeEditor() {
         if (!ing) return sum
         const effectiveCost = ing.cost_per_unit || ing.market_cost || 0
         if (!effectiveCost) return sum
-        return sum + (effectiveCost / (UNIT_TO_BASE[ing.unit] || 1)) * toBase(row.qty, row.unit)
+        return sum + unitPriceFor({ ...ing, cost_per_unit: effectiveCost }, row.unit) * (parseFloat(row.qty)||0)
       }, 0)
       const rounded = Math.round(cogs)
       if (rounded > 0) {
@@ -527,7 +531,7 @@ export default function RecipeEditor() {
     setSyncing(true)
     const [sriRes, iRes, srRes, mpRes] = await Promise.all([
       supabase.from("sub_recipe_ingredients").select("*"),
-      supabase.from("ingredients").select("id,name,unit,cost_per_unit"),
+      supabase.from("ingredients").select("id,name,unit,cost_per_unit,conversions"),
       supabase.from("sub_recipes").select("id,ingredient_id,yield_qty,yield_unit"),
       supabase.from("market_prices").select("ingredient_id,price,conv_qty").order("checked_at", { ascending: false }),
     ])
@@ -550,7 +554,7 @@ export default function RecipeEditor() {
         if (!ing) return sum
         const effectiveCost = ing.cost_per_unit || ing.market_cost || 0
         if (!effectiveCost) return sum
-        return sum + (effectiveCost / (UNIT_TO_BASE[ing.unit] || 1)) * toBase(row.qty, row.unit)
+        return sum + unitPriceFor({ ...ing, cost_per_unit: effectiveCost }, row.unit) * (parseFloat(row.qty)||0)
       }, 0)
       const yieldBase = toBase(sr.yield_qty || 1, sr.yield_unit || "gr")
       const costPerUnit = yieldBase > 0 ? totalCost / yieldBase : 0

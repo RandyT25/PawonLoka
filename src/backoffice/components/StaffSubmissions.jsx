@@ -1,30 +1,8 @@
 import { useState, useEffect, useRef } from "react"
 import { supabase } from "../../lib/supabase"
+import { toBaseUnit, unitPriceFor } from "../../shared/unitConversion"
 
 function fmt(n) { return "Rp " + Number(n||0).toLocaleString("id-ID") }
-
-// Convert a qty expressed in `unit` into the ingredient's own base/stock unit
-function toBaseUnit(ing, qty, unit) {
-  if (!ing || unit === ing.unit) return qty
-  const conv = (ing.conversions||[]).find(c => c.unit === unit)
-  if (conv && parseFloat(conv.qty) > 0) return qty * parseFloat(conv.qty)
-  const fallbacks = { kg:1000, L:1000, Galon:19000 }
-  if (ing.unit==="gr" && fallbacks[unit]) return qty * fallbacks[unit]
-  if (ing.unit==="ml" && fallbacks[unit]) return qty * fallbacks[unit]
-  return qty
-}
-
-// Price for one unit of `unit` (a purchase unit like "kg"/"pack"), given ing.cost_per_unit is priced per ing.unit (base unit)
-function unitPriceFor(ing, unit) {
-  if (!ing) return 0
-  if (unit === ing.unit) return ing.cost_per_unit || 0
-  const conv = (ing.conversions||[]).find(c => c.unit === unit)
-  if (conv && parseFloat(conv.qty) > 0) return (ing.cost_per_unit||0) * parseFloat(conv.qty)
-  const fallbacks = { kg:1000, L:1000, Galon:19000 }
-  if (ing.unit==="gr" && fallbacks[unit]) return (ing.cost_per_unit||0) * fallbacks[unit]
-  if (ing.unit==="ml" && fallbacks[unit]) return (ing.cost_per_unit||0) * fallbacks[unit]
-  return ing.cost_per_unit || 0
-}
 
 const TYPE_COLORS = { opname:"var(--brand)", waste:"var(--red)", production:"var(--green)", requisition:"#6554C0" }
 const TYPE_ICONS  = { opname:"📋", waste:"🗑️", production:"🏭", requisition:"🛒" }
@@ -258,7 +236,8 @@ export default function StaffSubmissions() {
           }
         }
         if (item) {
-          await supabase.from("ingredients").update({ stock:(item.stock||0)+producedQty }).eq("id",item.id)
+          const producedQtyBase = toBaseUnit(item, producedQty||0, d.yield_unit||d.unit||item.unit)
+          await supabase.from("ingredients").update({ stock:(item.stock||0)+producedQtyBase }).eq("id",item.id)
           const { error:prodErr } = await supabase.from("production_batches").insert({
             id:"PRD-"+Date.now(), item_id:item.id, item_name:d.item_name,
             batch_qty:producedQty, unit:d.yield_unit||d.unit, date:(sub.submitted_at||new Date().toISOString()).slice(0,10),
@@ -330,10 +309,15 @@ export default function StaffSubmissions() {
     const item = outputIngredientId ? ingredients.find(i=>i.id===outputIngredientId) : null
     const oldYield = sub.data.actual_yield ?? sub.data.batch_qty ?? 0
     const newYield = newData.actual_yield ?? newData.batch_qty ?? 0
-    const yieldDelta = newYield - oldYield
-    if (item && yieldDelta) {
-      const { data:freshItem } = await supabase.from("ingredients").select("stock").eq("id", item.id).maybeSingle()
-      await supabase.from("ingredients").update({ stock: Math.max(0, (freshItem?.stock ?? item.stock ?? 0) + yieldDelta) }).eq("id", item.id)
+    if (item) {
+      // Convert each side to base unit before diffing — the yield unit could have changed between edits.
+      const oldYieldBase = toBaseUnit(item, oldYield, sub.data.yield_unit || sub.data.unit || item.unit)
+      const newYieldBase = toBaseUnit(item, newYield, newData.yield_unit || newData.unit || item.unit)
+      const yieldDeltaBase = newYieldBase - oldYieldBase
+      if (yieldDeltaBase) {
+        const { data:freshItem } = await supabase.from("ingredients").select("stock").eq("id", item.id).maybeSingle()
+        await supabase.from("ingredients").update({ stock: Math.max(0, (freshItem?.stock ?? item.stock ?? 0) + yieldDeltaBase) }).eq("id", item.id)
+      }
     }
 
     // Update the linked production_batches row to match the new (post-edit) values.
@@ -391,8 +375,8 @@ export default function StaffSubmissions() {
 
   async function bulkApprove() {
     const ids = [...selected]
-    const targets = submissions.filter(s => ids.includes(s.id) && s.status==="pending" && s.type!=="requisition")
-    if (targets.length === 0) { alert("No approvable submissions selected (requisitions need \"To PO\" instead, and only pending items can be approved)."); return }
+    const targets = submissions.filter(s => ids.includes(s.id) && s.status==="pending")
+    if (targets.length === 0) { alert("No approvable submissions selected (only pending items can be approved)."); return }
     const warning = "Approve and apply "+targets.length+" selected submission"+(targets.length>1?"s":"")+"?"
     if (!(await askConfirm(warning))) return
     setProcessing(true)
@@ -404,28 +388,6 @@ export default function StaffSubmissions() {
     setSelected(new Set())
     setProcessing(false)
     if (failures.length) alert("Approved "+(targets.length-failures.length)+" of "+targets.length+". Failed:\n"+failures.join("\n"))
-  }
-
-  async function convertToPO(sub) {
-    const items = (sub.data.items||[]).map(item => {
-      const unit_cost = unitPriceFor(ingredients.find(x=>x.id===item.ingredient_id), item.unit)
-      const total_cost = item.qty * unit_cost
-      return {
-        ingredient_id:item.ingredient_id, name:item.ingredient_name,
-        qty:item.qty, unit:item.unit, unit_cost, total_cost, notes:item.notes,
-      }
-    })
-    const total = items.reduce((a,i)=>a+i.total_cost,0)
-    const poId = "PO-"+Date.now()
-    await supabase.from("purchase_orders").insert({
-      id:poId, supplierId:"", supplierName:"— Select Supplier —",
-      invoiceNo:poId, date:new Date().toISOString().slice(0,10),
-      status:"Unpaid", subtotal:total, total, items,
-      notes:"From staff requisition by "+sub.submitted_by+". Please assign supplier and confirm prices."
-    })
-    await supabase.from("staff_submissions").update({ status:"approved", reviewed_at:new Date().toISOString() }).eq("id",sub.id)
-    await load()
-    alert("Draft PO created. Go to Purchase Orders to complete it.")
   }
 
   function toggleReqItem(i) {
@@ -554,10 +516,9 @@ export default function StaffSubmissions() {
                         <button onClick={()=>setViewModal(s)} className="bo-btn bo-btn-ghost bo-btn-sm">View</button>
                         <button onClick={()=>openEdit(s)} className="bo-btn bo-btn-ghost bo-btn-sm" style={{ color:"var(--brand)" }}>Edit</button>
                         {s.status==="pending" && <>
-                          {s.type!=="requisition" && <button onClick={()=>approve(s)} disabled={processing} className="bo-btn bo-btn-sm" style={{ background:"var(--green-lt)", color:"var(--green)", border:"none", cursor:"pointer", borderRadius:"var(--r)", padding:"5px 11px", fontSize:12, fontWeight:600 }}>Approve</button>}
+                          <button onClick={()=>approve(s)} disabled={processing} className="bo-btn bo-btn-sm" style={{ background:"var(--green-lt)", color:"var(--green)", border:"none", cursor:"pointer", borderRadius:"var(--r)", padding:"5px 11px", fontSize:12, fontWeight:600 }}>Approve</button>
                           <button onClick={()=>reject(s)} disabled={processing} className="bo-btn bo-btn-danger bo-btn-sm">Reject</button>
                         </>}
-                        {s.type==="requisition" && s.status==="pending" && <button onClick={()=>convertToPO(s)} className="bo-btn bo-btn-sm" style={{ background:"#6554C0", color:"#fff", border:"none", cursor:"pointer", borderRadius:"var(--r)", padding:"5px 11px", fontSize:12, fontWeight:600 }}>To PO</button>}
                         <button onClick={()=>deleteSubmission(s)} className="bo-btn bo-btn-ghost bo-btn-sm" style={{ color:"var(--red)" }}>Delete</button>
                       </div>
                     </td>
@@ -744,10 +705,7 @@ export default function StaffSubmissions() {
               <button onClick={()=>openEdit(viewModal)} className="bo-btn bo-btn-ghost" style={{ color:"var(--brand)" }}>Edit</button>
               {viewModal.status==="pending" && <>
                 <button onClick={()=>reject(viewModal)} disabled={processing} className="bo-btn bo-btn-danger">Reject</button>
-                {viewModal.type==="requisition"
-                  ? <button onClick={()=>convertToPO(viewModal)} disabled={processing} className="bo-btn bo-btn-primary" style={{ background:"#6554C0" }}>Convert to PO</button>
-                  : <button onClick={()=>approve(viewModal)} disabled={processing} className="bo-btn bo-btn-primary">Approve & Apply</button>
-                }
+                <button onClick={()=>approve(viewModal)} disabled={processing} className="bo-btn bo-btn-primary">Approve & Apply</button>
               </>}
             </div>
           </div>

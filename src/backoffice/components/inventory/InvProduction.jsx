@@ -1,18 +1,8 @@
 import { useState, useEffect } from "react"
 import { supabase } from "../../../lib/supabase"
+import { toBaseUnit } from "../../../shared/unitConversion"
 
 function fmt(n) { return "Rp " + Number(n||0).toLocaleString("id-ID") }
-
-// Convert a qty expressed in `unit` into the ingredient's own base/stock unit
-function toBaseUnit(ing, qty, unit) {
-  if (!ing || unit === ing.unit) return qty
-  const conv = (ing.conversions||[]).find(c => c.unit === unit)
-  if (conv && parseFloat(conv.qty) > 0) return qty * parseFloat(conv.qty)
-  const fallbacks = { kg:1000, L:1000, Galon:19000 }
-  if (ing.unit==="gr" && fallbacks[unit]) return qty * fallbacks[unit]
-  if (ing.unit==="ml" && fallbacks[unit]) return qty * fallbacks[unit]
-  return qty
-}
 
 export default function InvProduction() {
   const [batches,       setBatches]       = useState([])
@@ -73,6 +63,17 @@ export default function InvProduction() {
 
     let ingredients_used
     if (useRecipe && recipeId) {
+      const sub = subRecipes.find(s => s.id === recipeId)
+      const typicalYield = parseFloat(sub?.yield_qty) || 0
+      // Guard against fat-finger entries (e.g. extra zeros) — normal batches can legitimately
+      // run up to ~20x a recipe's single yield, so only flag truly extreme outliers.
+      if (typicalYield > 0 && (batchQty > typicalYield * 50 || batchQty < typicalYield * 0.02)) {
+        const ok = confirm(
+          `Batch ini ${batchQty} ${form.unit || sub.yield_unit}, tapi resep ini biasanya menghasilkan ` +
+          `${typicalYield} ${sub.yield_unit} per batch. Ini terlihat seperti salah ketik (misal kelebihan angka 0). Lanjutkan?`
+        )
+        if (!ok) return
+      }
       const lines = subRecipeIngs.filter(l => l.sub_recipe_id === recipeId)
       if (!lines.length) { alert("Resep tidak memiliki bahan. Tambahkan bahan di Recipe Editor."); return }
       ingredients_used = lines.map(l => {
@@ -111,12 +112,13 @@ export default function InvProduction() {
         time:new Date().toLocaleTimeString("id-ID",{hour:"2-digit",minute:"2-digit"})
       })
     }
-    // Add to semi-finished stock + log
-    await supabase.from("ingredients").update({ stock:(item.stock||0)+parseFloat(form.batch_qty) }).eq("id",item.id)
+    // Add to semi-finished stock + log (yield may be entered in a different unit than the item's base unit)
+    const yieldBase = toBaseUnit(item, parseFloat(form.batch_qty)||0, form.unit||item.unit)
+    await supabase.from("ingredients").update({ stock:(item.stock||0)+yieldBase }).eq("id",item.id)
     await supabase.from("stock_movements").insert({
       id:"MOV-"+Date.now()+"-"+Math.random().toString(36).slice(2,6),
       type:"Production", ingredient_id:item.id, ingredient_name:item.name,
-      qty:parseFloat(form.batch_qty), unit:form.unit||item.unit, ref:batchId,
+      qty:yieldBase, unit:item.unit, ref:batchId,
       note:"Produced batch",
       date:form.date,
       time:new Date().toLocaleTimeString("id-ID",{hour:"2-digit",minute:"2-digit"})
