@@ -1,7 +1,18 @@
-import { useState } from "react"
+import { useState, useRef } from "react"
 import CalendarRangePicker from "./CalendarRangePicker"
 
-const todayStr = () => new Date().toISOString().slice(0, 10)
+// Format a Date's own local Y/M/D — never route a calendar date through
+// toISOString(), which converts to UTC and rolls back a day for any timezone
+// ahead of UTC (e.g. WIB, UTC+7) whenever the local time is past midnight
+// but before the UTC day has turned over.
+function toLocalYMD(d) {
+  const y = d.getFullYear()
+  const m = String(d.getMonth() + 1).padStart(2, "0")
+  const day = String(d.getDate()).padStart(2, "0")
+  return `${y}-${m}-${day}`
+}
+
+const todayStr = () => toLocalYMD(new Date())
 
 const fmtRange = (from, to) => {
   if (!from) return "Tanggal"
@@ -17,8 +28,19 @@ export default function DateRangePicker({
   loading, lastUpdated, onRefresh, children
 }) {
   const [showCal, setShowCal] = useState(false)
+  // Once ‹/› steps off a quick preset, `range` becomes "custom" — this remembers which
+  // preset we're still stepping through (months vary in length, so repeated clicks must
+  // keep anchoring to "current month ± dir", not just re-shift by the previous window's
+  // day-count, or the window drifts off calendar-month boundaries after the first step).
+  const navModeRef = useRef(null)
+
+  function selectQuickRange(v) {
+    navModeRef.current = null
+    setRange(v)
+  }
 
   function onSave(from, to) {
+    navModeRef.current = null
     setCustomDate(from)
     setCustomDateTo?.(to)
     setRange("custom")
@@ -28,11 +50,13 @@ export default function DateRangePicker({
   function navigate(dir) {
     const now = new Date()
     let fromDate, toDate
+    const continuingMonth = range === "custom" && navModeRef.current === "month"
 
     if (range === "today") {
       const d = new Date()
       d.setDate(d.getDate() + dir)
-      fromDate = toDate = d.toISOString().slice(0, 10)
+      fromDate = toDate = toLocalYMD(d)
+      navModeRef.current = null
     } else if (range === "week") {
       const dow = (now.getDay() + 6) % 7
       const weekStart = new Date()
@@ -40,21 +64,27 @@ export default function DateRangePicker({
       weekStart.setHours(0, 0, 0, 0)
       const weekEnd = new Date(weekStart)
       weekEnd.setDate(weekStart.getDate() + 6)
-      fromDate = weekStart.toISOString().slice(0, 10)
-      toDate = weekEnd.toISOString().slice(0, 10)
-    } else if (range === "month") {
-      const d = new Date(now.getFullYear(), now.getMonth() + dir, 1)
+      fromDate = toLocalYMD(weekStart)
+      toDate = toLocalYMD(weekEnd)
+      navModeRef.current = null
+    } else if (range === "month" || continuingMonth) {
+      // Anchor from the currently-shown month when continuing a month-stepping session,
+      // otherwise from today (first step off the "Bulan Ini" preset).
+      const base = range === "month" ? now : new Date((customDate || todayStr()) + "T12:00:00")
+      const d = new Date(base.getFullYear(), base.getMonth() + dir, 1)
       const end = new Date(d.getFullYear(), d.getMonth() + 1, 0)
-      fromDate = d.toISOString().slice(0, 10)
-      toDate = end.toISOString().slice(0, 10)
+      fromDate = toLocalYMD(d)
+      toDate = toLocalYMD(end)
+      navModeRef.current = "month"
     } else {
       const a = new Date((customDate || todayStr()) + "T12:00:00")
       const b = new Date((customDateTo || customDate || todayStr()) + "T12:00:00")
       const spanDays = Math.max(1, Math.round((b - a) / 86400000) + 1)
       a.setDate(a.getDate() + dir * spanDays)
       b.setDate(b.getDate() + dir * spanDays)
-      fromDate = a.toISOString().slice(0, 10)
-      toDate = b.toISOString().slice(0, 10)
+      fromDate = toLocalYMD(a)
+      toDate = toLocalYMD(b)
+      navModeRef.current = null
     }
 
     setCustomDate(fromDate)
@@ -82,7 +112,7 @@ export default function DateRangePicker({
 
           {/* Quick range buttons */}
           {[["today","Hari Ini"],["week","Minggu Ini"],["month","Bulan Ini"]].map(([v, l]) => (
-            <button key={v} onClick={() => setRange(v)}
+            <button key={v} onClick={() => selectQuickRange(v)}
               className={"bo-btn bo-btn-sm " + (range === v ? "bo-btn-primary" : "bo-btn-ghost")}>
               {l}
             </button>
@@ -103,7 +133,7 @@ export default function DateRangePicker({
 
           {/* ✕ clear custom */}
           {isCustom && (
-            <button onClick={() => setRange("today")}
+            <button onClick={() => selectQuickRange("today")}
               style={{ background:"none", border:"1px solid var(--surface3)", borderRadius:6,
                        padding:"3px 8px", fontSize:12, cursor:"pointer", color:"var(--ink4)", lineHeight:1 }}>
               ✕
@@ -158,7 +188,7 @@ export default function DateRangePicker({
 
 export function buildDateRange(range, customDate, customDateTo = null) {
   const now = new Date()
-  const today = now.toISOString().slice(0, 10)
+  const today = toLocalYMD(now)
   if (range === "today") {
     return { fromStr: today + "T00:00:00+08:00", toStr: today + "T23:59:59+08:00" }
   }
@@ -167,10 +197,12 @@ export function buildDateRange(range, customDate, customDateTo = null) {
     const d = new Date()
     d.setDate(now.getDate() - dow)
     d.setHours(0, 0, 0, 0)
-    return { fromStr: d.toISOString().slice(0, 10) + "T00:00:00+08:00", toStr: null }
+    return { fromStr: toLocalYMD(d) + "T00:00:00+08:00", toStr: null }
   }
   if (range === "month") {
-    return { fromStr: now.toISOString().slice(0, 7) + "-01T00:00:00+08:00", toStr: null }
+    const y = now.getFullYear()
+    const m = String(now.getMonth() + 1).padStart(2, "0")
+    return { fromStr: `${y}-${m}-01T00:00:00+08:00`, toStr: null }
   }
   if (range === "custom" && customDate) {
     const toDate = customDateTo || customDate

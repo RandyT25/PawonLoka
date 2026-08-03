@@ -2,6 +2,7 @@ import { useState, useEffect } from "react"
 import { supabase } from "../../../lib/supabase"
 import SearchSelect from "../../components/SearchSelect"
 import { toBaseUnit } from "../../../shared/unitConversion"
+import DateRangePicker, { buildDateRange } from "../DateRangePicker"
 
 function fmt(n) { return "Rp " + Number(n||0).toLocaleString("id-ID") }
 const UNITS_FALLBACK = ["gr","kg","ml","L","Galon","pcs","Ekor","butir","biji","buah","ikat","lembar","bungkus","pack","sachet","botol","Can","tsp","tbsp","cup","porsi","portion"]
@@ -160,8 +161,12 @@ export default function InvPO() {
   })
   const [payLines,    setPayLines]    = useState([])
   const [unitsList,   setUnitsList]   = useState(UNITS_FALLBACK)
+  const today = new Date().toISOString().slice(0,10)
+  const [range,        setRange]        = useState("month")
+  const [customDate,   setCustomDate]   = useState(today)
+  const [customDateTo, setCustomDateTo] = useState(today)
 
-  useEffect(() => { load() }, [])
+  useEffect(() => { load() }, [range, customDate, customDateTo])
   useEffect(() => {
     if (!openMenu) return
     const handler = () => setOpenMenu(null)
@@ -175,8 +180,11 @@ export default function InvPO() {
 
   async function load() {
     setLoading(true)
+    const { fromStr, toStr } = buildDateRange(range, customDate, customDateTo)
+    const fromDate = fromStr.slice(0, 10)
+    const toDate   = (toStr || new Date().toISOString()).slice(0, 10)
     const [{ data:p }, { data:i }, { data:s }] = await Promise.all([
-      supabase.from("purchase_orders").select("*").order("created_at", { ascending:false }),
+      supabase.from("purchase_orders").select("*").gte("date", fromDate).lte("date", toDate).order("created_at", { ascending:false }),
       supabase.from("ingredients").select("*"),
       supabase.from("suppliers").select("*").eq("active", true),
     ])
@@ -485,6 +493,13 @@ export default function InvPO() {
 
   return (
     <div>
+      <DateRangePicker
+        range={range} setRange={setRange}
+        customDate={customDate} setCustomDate={setCustomDate}
+        customDateTo={customDateTo} setCustomDateTo={setCustomDateTo}
+        loading={loading} onRefresh={load}
+      />
+
       <div className="bo-metrics" style={{ gridTemplateColumns:"repeat(5,1fr)", marginBottom:16 }}>
         <div className="bo-met blue"><div className="bo-met-label">Faktur Pembelian</div><div className="bo-met-val">{fmt(pos.reduce((a,p)=>a+(p.total||0),0))}</div><div className="bo-met-sub">{pos.length} faktur</div></div>
         <div className="bo-met amber"><div className="bo-met-label">Belum Dibayar</div><div className="bo-met-val">{fmt(unpaid.reduce((a,p)=>a+(p.total||0),0))}</div><div className="bo-met-sub">{unpaid.length} faktur</div></div>
