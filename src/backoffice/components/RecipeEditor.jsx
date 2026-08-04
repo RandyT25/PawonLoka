@@ -214,7 +214,11 @@ function RecipePanel({ item, itemType, ingredients, subRecipes, onSaved, onCance
 
   function handleIngChange(i, ingId) {
     const found = all.find(x => x.id === ingId)
-    updateRow(i, { ingredient_id: ingId, name: found?.name||"", unit: found?.yield_unit || found?.unit || "gr" })
+    // A sub-recipe's own id isn't a real ingredients-table row — resolve to the
+    // ingredient it's actually linked to, since that's what stock deduction at
+    // sale time (and production consumption) looks up.
+    const resolvedId = found?.ingredient_id || ingId
+    updateRow(i, { ingredient_id: resolvedId, name: found?.name||"", unit: found?.yield_unit || found?.unit || "gr" })
   }
 
   async function save() {

@@ -382,7 +382,13 @@ export default function POS() {
             stock: Math.max(0, (ing.stock || 0) - deductions[id])
           }).eq('id', id)
         })),
-        supabase.from('stock_movements').insert(movements).catch(() => {}),
+        // Supabase's query builder is thenable (works with await/Promise.all) but is not a
+        // real Promise, so it has no .catch() method — calling one directly threw a
+        // synchronous TypeError that silently killed this insert on every single sale
+        // (caught by the try/catch below, so payment always succeeded regardless — this is
+        // why zero "Sale" stock_movements were ever recorded despite deduction working).
+        // Promise.resolve() wraps it in a real Promise so .catch() is safe to chain.
+        Promise.resolve(supabase.from('stock_movements').insert(movements)).catch(() => {}),
       ])
     } catch(e) { console.error('Stock deduction error:', e) }
   }
