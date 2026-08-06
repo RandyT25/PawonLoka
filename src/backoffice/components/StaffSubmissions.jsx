@@ -4,9 +4,9 @@ import { toBaseUnit, unitPriceFor } from "../../shared/unitConversion"
 
 function fmt(n) { return "Rp " + Number(n||0).toLocaleString("id-ID") }
 
-const TYPE_COLORS = { opname:"var(--brand)", waste:"var(--red)", production:"var(--green)", requisition:"#6554C0" }
-const TYPE_ICONS  = { opname:"📋", waste:"🗑️", production:"🏭", requisition:"🛒" }
-const TYPE_LABELS = { opname:"Stock Count", waste:"Waste", production:"Production", requisition:"Request" }
+const TYPE_COLORS = { opname:"var(--brand)", waste:"var(--red)", consumption:"#F59E0B", production:"var(--green)", requisition:"#6554C0" }
+const TYPE_ICONS  = { opname:"📋", waste:"🗑️", consumption:"🍽️", production:"🏭", requisition:"🛒" }
+const TYPE_LABELS = { opname:"Stock Count", waste:"Waste", consumption:"Staff Meal", production:"Production", requisition:"Request" }
 
 function IngSearchEdit({ ingredients, onSelect }) {
   const [q, setQ] = useState("")
@@ -132,6 +132,8 @@ export default function StaffSubmissions() {
       }) }
     } else if (editModal.type === "waste") {
       cleaned = { ...editData, qty: parseFloat(editData.qty)||0 }
+    } else if (editModal.type === "consumption") {
+      cleaned = { ...editData, qty: parseFloat(editData.qty)||0 }
     } else if (editModal.type === "requisition") {
       cleaned = { ...editData, items: (editData.items||[]).map(x => ({...x, qty: parseFloat(x.qty)||0})) }
     } else if (editModal.type === "production") {
@@ -211,6 +213,28 @@ export default function StaffSubmissions() {
             type:"Waste", ingredient_id:d.ingredient_id, ingredient_name:d.ingredient_name,
             qty:-d.qty, unit:d.unit, ref:sub.id,
             note:"Staff waste by "+sub.submitted_by+": "+d.reason,
+            date:new Date().toISOString().slice(0,10),
+            time:new Date().toLocaleTimeString("id-ID",{hour:"2-digit",minute:"2-digit"})
+          })
+        }
+      } else if (sub.type==="consumption") {
+        const d = sub.data
+        const ing = ingredients.find(i=>i.id===d.ingredient_id)
+        if (ing) {
+          await supabase.from("ingredients").update({ stock:Math.max(0,(ing.stock||0)-d.qty) }).eq("id",ing.id)
+          const { error:csmErr } = await supabase.from("staff_consumption").insert({
+            id:"CSM-"+Date.now(), date:new Date().toISOString().slice(0,10),
+            ingredient_id:d.ingredient_id, ingredient_name:d.ingredient_name,
+            qty:d.qty, unit:d.unit, cost:d.estimated_cost,
+            consumed_by:sub.submitted_by, notes:d.notes||null,
+            submission_id:sub.id
+          })
+          if (csmErr) throw csmErr
+          await supabase.from("stock_movements").insert({
+            id:"MOV-"+Date.now()+"-"+Math.random().toString(36).slice(2,6),
+            type:"Staff Meal", ingredient_id:d.ingredient_id, ingredient_name:d.ingredient_name,
+            qty:-d.qty, unit:d.unit, ref:sub.id,
+            note:"Staff meal by "+sub.submitted_by+(d.notes?": "+d.notes:""),
             date:new Date().toISOString().slice(0,10),
             time:new Date().toLocaleTimeString("id-ID",{hour:"2-digit",minute:"2-digit"})
           })
@@ -460,7 +484,7 @@ export default function StaffSubmissions() {
       {/* Filters */}
       <div style={{ display:"flex", gap:8, marginBottom:12, flexWrap:"wrap", alignItems:"center" }}>
         <div style={{ display:"flex", gap:4 }}>
-          {[["all","All Types"],["opname","Stock Count"],["waste","Waste"],["production","Production"],["requisition","Request"]].map(([f,l])=>(
+          {[["all","All Types"],["opname","Stock Count"],["waste","Waste"],["consumption","Staff Meal"],["production","Production"],["requisition","Request"]].map(([f,l])=>(
             <button key={f} onClick={()=>setTypeFilter(f)}
               className={"bo-btn bo-btn-sm "+(typeFilter===f?"bo-btn-primary":"bo-btn-ghost")}
               style={{ fontSize:11 }}>{TYPE_ICONS[f]||""} {l}</button>
@@ -500,6 +524,7 @@ export default function StaffSubmissions() {
                 const opnameVariance = (s.data.items||[]).reduce((a,item)=>a+(item.diff*(ingredients.find(x=>x.id===item.ingredient_id)?.cost_per_unit||0)),0)
                 const summary = s.type==="opname" ? (s.data.items||[]).length+" items counted — "+fmt(opnameVariance)+" variance"
                   : s.type==="waste" ? s.data.qty+" "+s.data.unit+" — "+s.data.ingredient_name
+                  : s.type==="consumption" ? s.data.qty+" "+s.data.unit+" — "+s.data.ingredient_name
                   : s.type==="requisition" ? (s.data.items||[]).length+" items requested — "+fmt(reqTotal)+" total"
                   : (s.data.batch_qty ? s.data.batch_qty+"× resep · " : "")+(s.data.actual_yield??s.data.batch_qty)+" "+(s.data.yield_unit||s.data.unit||"")+" "+s.data.item_name
                 return (
@@ -585,6 +610,13 @@ export default function StaffSubmissions() {
               {viewModal.type==="waste" && (
                 <div style={{ display:"grid", gap:14 }}>
                   {[["Ingredient",viewModal.data.ingredient_name],["Quantity",viewModal.data.qty+" "+viewModal.data.unit],["Reason",viewModal.data.reason],["Est. Cost",fmt(viewModal.data.estimated_cost)],["Notes",viewModal.data.notes||"—"]].map(([k,v])=>(
+                    <div key={k}><div style={{ fontSize:11, color:"var(--ink4)", fontWeight:700, textTransform:"uppercase" }}>{k}</div><div style={{ fontWeight:600, marginTop:3 }}>{v}</div></div>
+                  ))}
+                </div>
+              )}
+              {viewModal.type==="consumption" && (
+                <div style={{ display:"grid", gap:14 }}>
+                  {[["Ingredient",viewModal.data.ingredient_name],["Quantity",viewModal.data.qty+" "+viewModal.data.unit],["Est. Cost",fmt(viewModal.data.estimated_cost)],["Notes",viewModal.data.notes||"—"]].map(([k,v])=>(
                     <div key={k}><div style={{ fontSize:11, color:"var(--ink4)", fontWeight:700, textTransform:"uppercase" }}>{k}</div><div style={{ fontWeight:600, marginTop:3 }}>{v}</div></div>
                   ))}
                 </div>
@@ -783,6 +815,13 @@ export default function StaffSubmissions() {
                     <select value={editData.reason||"Expired"} onChange={e=>setEditData(d=>({...d,reason:e.target.value}))} className="bo-select">
                       {["Expired","Damaged","Overproduction","Spillage","Other"].map(r=><option key={r}>{r}</option>)}
                     </select></div>
+                </div>
+              )}
+
+              {editModal.type==="consumption" && (
+                <div style={{ display:"grid", gap:12 }}>
+                  <div><label className="bo-label">Quantity</label>
+                    <input type="number" value={editData.qty||""} onChange={e=>setEditData(d=>({...d,qty:e.target.value}))} className="bo-input" /></div>
                 </div>
               )}
 

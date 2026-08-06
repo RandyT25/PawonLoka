@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from "react"
 import { supabase } from "../../../lib/supabase"
 import DateRangePicker, { buildDateRange } from "../DateRangePicker"
 
-const TYPE_COLORS = { Sale:"var(--brand)", Purchase:"var(--green)", Waste:"var(--red)", Production:"#6554C0", Adjustment:"var(--amber)" }
+const TYPE_COLORS = { Sale:"var(--brand)", Purchase:"var(--green)", Waste:"var(--red)", "Staff Meal":"#F59E0B", Production:"#6554C0", Adjustment:"var(--amber)" }
 const today = () => new Date().toISOString().slice(0, 10)
 
 export default function InvMovements() {
@@ -40,7 +40,7 @@ export default function InvMovements() {
 
   useEffect(() => { load() }, [load])
 
-  const types = ["all","Sale","Purchase","Waste","Production","Adjustment"]
+  const types = ["all","Sale","Purchase","Waste","Staff Meal","Production","Adjustment"]
   const filtered = filter === "all" ? movements : movements.filter(m => m.type === filter)
 
   // Consumption summary: group Sale movements by ingredient

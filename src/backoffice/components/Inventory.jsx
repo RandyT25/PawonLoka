@@ -6,6 +6,7 @@ import InvSuppliers   from "./inventory/InvSuppliers"
 import InvProduction  from "./inventory/InvProduction"
 import InvOpname      from "./inventory/InvOpname"
 import InvWaste       from "./inventory/InvWaste"
+import InvStaffConsumption from "./inventory/InvStaffConsumption"
 import InvMovements   from "./inventory/InvMovements"
 
 const TABS = [
@@ -17,6 +18,7 @@ const TABS = [
   { id:"inv-production",   label:"Production",       icon:"⚙️" },
   { id:"inv-opname",       label:"Stock Opname",     icon:"🔢" },
   { id:"inv-waste",        label:"Waste Recording",  icon:"🗑" },
+  { id:"inv-consumption",  label:"Staff Consumption",icon:"🍽" },
   { id:"inv-movements",    label:"Movement History", icon:"📋" },
 ]
 
@@ -29,6 +31,7 @@ const SCREENS = {
   "inv-production":  InvProduction,
   "inv-opname":      InvOpname,
   "inv-waste":       InvWaste,
+  "inv-consumption": InvStaffConsumption,
   "inv-movements":   InvMovements,
 }
 

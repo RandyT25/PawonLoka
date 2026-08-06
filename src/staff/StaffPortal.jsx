@@ -43,15 +43,16 @@ const STATION_DEPTS = {
 }
 
 const MENUS = {
-  Kitchen: ["opname","waste","production","requisition"],
-  Snack:   ["opname","waste","production","requisition"],
-  Bar:     ["opname","waste","production","requisition"],
-  Kasir:   ["requisition"],
+  Kitchen: ["opname","waste","consumption","production","requisition"],
+  Snack:   ["opname","waste","consumption","production","requisition"],
+  Bar:     ["opname","waste","consumption","production","requisition"],
+  Kasir:   ["consumption","requisition"],
 }
 
 const MENU_ITEMS = [
   { screen:"opname",      icon:"📋", label:"Stock Count",         sub:"Count current stock levels",        bg:"#0066ff" },
   { screen:"waste",       icon:"🗑️", label:"Waste / Spoilage",    sub:"Report damaged or expired items",   bg:"#DE350B" },
+  { screen:"consumption", icon:"🍽️", label:"Staff Meal / Personal Use", sub:"Log food or drink you took for yourself", bg:"#F59E0B" },
   { screen:"production",  icon:"🏭", label:"Production Batch",    sub:"Record what was produced today",    bg:"#00875A" },
   { screen:"requisition", icon:"🛒", label:"Request Ingredients", sub:"Request items needed for today",    bg:"#374151" },
 ]
@@ -132,6 +133,7 @@ export default function StaffPortal() {
   const [opnameSearch, setOpnameSearch] = useState("")
   const [staffName,    setStaffName]    = useState("")
   const [wasteForm,    setWasteForm]    = useState({ ingredient_id:"", qty:"", reason:"Expired", notes:"" })
+  const [consumptionForm, setConsumptionForm] = useState({ ingredient_id:"", qty:"", notes:"" })
   const [prodSubId,    setProdSubId]    = useState("")
   const [prodBatchQty, setProdBatchQty] = useState("")
   const [prodYield,    setProdYield]    = useState("")
@@ -230,6 +232,12 @@ export default function StaffPortal() {
     await submit("waste", { ingredient_id:ing.id, ingredient_name:ing.name, qty:parseFloat(wasteForm.qty), unit:ing.unit, reason:wasteForm.reason, notes:wasteForm.notes, estimated_cost:(parseFloat(wasteForm.qty)||0)*(ing.cost_per_unit||0) })
   }
 
+  async function submitConsumption() {
+    const ing = ingredients.find(i=>i.id===consumptionForm.ingredient_id)
+    if (!ing||!consumptionForm.qty) { alert("Select ingredient and quantity"); return }
+    await submit("consumption", { ingredient_id:ing.id, ingredient_name:ing.name, qty:parseFloat(consumptionForm.qty), unit:ing.unit, notes:consumptionForm.notes, estimated_cost:(parseFloat(consumptionForm.qty)||0)*(ing.cost_per_unit||0) })
+  }
+
   async function submitProduction() {
     if (!prodSubId) { alert("Pilih resep terlebih dahulu"); return }
     if (!prodBatchQty || parseFloat(prodBatchQty) <= 0) { alert("Masukkan jumlah batch"); return }
@@ -264,6 +272,7 @@ export default function StaffPortal() {
   function reset() {
     setDone(false); setScreen("home"); setStaffName(""); setOpnameSearch("")
     setWasteForm({ ingredient_id:"", qty:"", reason:"Expired", notes:"" })
+    setConsumptionForm({ ingredient_id:"", qty:"", notes:"" })
     setProdSubId(""); setProdBatchQty(""); setProdYield(""); setProdYieldUnit(""); setProdUsed([]); setProdNotes("")
     setReqDate(new Date().toISOString().slice(0,10)); setReqNotes(""); setReqItems([{ ingredient_id:"", qty:"", unit:"" }])
     if ((stationStaff[station]||[]).length === 1) setStaffName(stationStaff[station][0])
@@ -440,6 +449,36 @@ export default function StaffPortal() {
             dir="ltr" autoComplete="off" autoCorrect="off" autoCapitalize="off" spellCheck={false} />
         </div>
         <button onClick={submitWaste} disabled={saving} style={{ ...s.btn, background:"#DE350B", color:"#fff" }}>{saving?"Submitting...":"Submit Waste Report"}</button>
+      </div>
+    </div>
+  )
+
+  if (screen==="consumption") return (
+    <div style={s.wrap}>
+      <div style={s.header}>
+        <button onClick={()=>setScreen("home")} style={s.backBtn}>←</button>
+        <span style={{ fontSize:17, fontWeight:800 }}>Staff Meal / Personal Use</span>
+      </div>
+      <div style={s.body}>
+        <div style={s.card}>
+          <StaffPicker station={station} value={staffName} onChange={setStaffName} staffList={stationStaff[station]||[]} />
+        </div>
+        <div style={s.card}>
+          <label style={s.label}>Ingredient / Sub-Recipe *</label>
+          <SearchableSelect options={[...ingredients, ...subRecipes.map(s=>({id:s.id,name:s.name,unit:s.unit||"gr",cost_per_unit:s.cost_per_unit||0}))].sort((a,b)=>a.name.localeCompare(b.name))} value={consumptionForm.ingredient_id} onChange={v=>setConsumptionForm(f=>({...f,ingredient_id:v}))} placeholder="— Search ingredient or sub-recipe —" />
+          <label style={{ ...s.label, marginTop:14 }}>Quantity *</label>
+          <input type="number" inputMode="decimal" value={consumptionForm.qty} onChange={e=>setConsumptionForm(f=>({...f,qty:e.target.value}))} style={s.input} placeholder="0" />
+          {consumptionForm.ingredient_id && consumptionForm.qty && (
+            <div style={{ marginTop:8, padding:"9px 13px", background:"#fff8e6", borderRadius:10, fontSize:13, color:"#B45309", fontWeight:700 }}>
+              Est. Cost: Rp {fmt((parseFloat(consumptionForm.qty)||0)*(ingredients.find(i=>i.id===consumptionForm.ingredient_id)?.cost_per_unit||0))}
+            </div>
+          )}
+          <label style={{ ...s.label, marginTop:14 }}>Notes</label>
+          <input value={consumptionForm.notes} onChange={e=>setConsumptionForm(f=>({...f,notes:e.target.value}))}
+            style={{ ...s.input, direction:'ltr', unicodeBidi:'plaintext' }} placeholder="Optional"
+            dir="ltr" autoComplete="off" autoCorrect="off" autoCapitalize="off" spellCheck={false} />
+        </div>
+        <button onClick={submitConsumption} disabled={saving} style={{ ...s.btn, background:"#F59E0B", color:"#fff" }}>{saving?"Submitting...":"Submit Report"}</button>
       </div>
     </div>
   )
