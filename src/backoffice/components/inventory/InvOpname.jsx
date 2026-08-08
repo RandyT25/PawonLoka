@@ -35,7 +35,7 @@ export default function InvOpname() {
   }
 
   async function submitOpname() {
-    if (!confirm("Submit stock count? System stock will be updated to actual counts.")) return
+    if (!confirm("Submit stock count? Stock will be adjusted by the counted variance (actual − system) on top of live stock.")) return
     setSubmitting(true)
     try {
       const items = activeCount.map(item => ({
@@ -56,6 +56,17 @@ export default function InvOpname() {
         const newStock = Math.max(0, (freshIng?.stock ?? item.system_qty) + item.diff)
         const { error:updErr } = await supabase.from("ingredients").update({ stock:newStock }).eq("id", item.ingredient_id)
         if (updErr) throw updErr
+        if (item.diff !== 0) {
+          const { error:movErr } = await supabase.from("stock_movements").insert({
+            id:"MOV-"+Date.now()+"-"+Math.random().toString(36).slice(2,6),
+            type:"Adjustment", ingredient_id:item.ingredient_id, ingredient_name:item.ingredient_name,
+            qty:item.diff, unit:item.unit, ref:sessionId,
+            note:"Stock opname "+sessionId,
+            date:new Date().toISOString().slice(0,10),
+            time:new Date().toLocaleTimeString("id-ID",{hour:"2-digit",minute:"2-digit"})
+          })
+          if (movErr) throw movErr
+        }
       }
       await load()
       setActiveCount(null)

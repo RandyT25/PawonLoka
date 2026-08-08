@@ -205,6 +205,12 @@ export default function Accounting() {
 
   const bahanBakuPO = poByCategory["bahan_baku"] || 0
 
+  // Raw-ingredient PO spend is already recognized in the P&L via totalCOGS (the recipe
+  // cost of items actually sold, itself derived from the same PO-driven WAC) — counting
+  // the full purchase amount again here would double-count it. Only non-food PO spend
+  // (kitchen/bar supplies, cleaning, gas/utilities) is a genuine operating expense.
+  const nonFoodPOTotal = poTotal - bahanBakuPO
+
   // Per-PO category breakdown, for the itemized Pengeluaran listing — most POs are
   // single-category in practice (one row), but a PO spanning multiple categories
   // renders as one row per category so the catFilter pills work correctly against it.
@@ -219,8 +225,9 @@ export default function Accounting() {
     return Object.entries(buckets).map(([catId,amount]) => ({ catId, amount }))
   }
 
-  // Auto salary expense
-  const salaryTotal = staff.reduce((a,s)=>a+(s.salary||0),0)
+  // Auto salary expense — active staff only; a departed/inactive staff member's salary
+  // shouldn't keep hitting every future period's P&L.
+  const salaryTotal = staff.filter(s=>s.active!==false).reduce((a,s)=>a+(s.salary||0),0)
 
   // Outstanding kas bon
   const kbOutstanding = kasBonList.filter(k=>k.status==="outstanding").reduce((a,k)=>a+(k.amount||0),0)
@@ -248,7 +255,7 @@ export default function Accounting() {
   const manualExpenses = expenses.filter(e=>e.auto_source!=="po"&&e.auto_source!=="salary")
   const manualTotal    = manualExpenses.reduce((a,e)=>a+(e.amount||0),0)
 
-  const totalOpex  = poTotal + salaryTotal + manualTotal
+  const totalOpex  = nonFoodPOTotal + salaryTotal + manualTotal
   const netProfit  = grossProfit - totalOpex
   const netMargin  = netRevenue>0 ? Math.round((netProfit/netRevenue)*100) : 0
 
@@ -378,7 +385,7 @@ export default function Accounting() {
       ["Penjualan Bersih", fmt(netRevenue)],
       ["HPP / COGS", fmt(totalCOGS)],
       ["Laba Kotor", fmt(grossProfit) + " (" + grossMargin + "%)"],
-      ["Bahan Baku (PO)", fmt(bahanBakuPO)],
+      ["Bahan Baku (PO) — info, sudah di COGS", fmt(bahanBakuPO)],
       ["Gaji Karyawan", fmt(salaryTotal)],
       ...EXPENSE_CATEGORIES.filter(c=>!c.auto).map(c=>[c.label, fmt(catTotal(c.id))]),
       ["Total Beban", fmt(totalOpex)],
@@ -419,7 +426,7 @@ export default function Accounting() {
             ["Pendapatan Bersih", netRevenue],
             ["COGS", totalCOGS],
             ["Laba Kotor", grossProfit],
-            ["Bahan Baku (PO)", bahanBakuPO],
+            ["Bahan Baku (PO) — info, sudah di COGS", bahanBakuPO],
             ["Gaji Karyawan", salaryTotal],
             ...EXPENSE_CATEGORIES.filter(c=>!c.auto).map(c=>[c.label, catTotal(c.id)]),
             ["Total Beban", totalOpex],
@@ -535,8 +542,12 @@ export default function Accounting() {
             </div>
             <div className="bo-card">
               <div className="bo-card-title">Beban per Kategori</div>
+              {bahanBakuPO>0 && (
+                <div style={{ fontSize:11,color:"#6B778C",fontStyle:"italic",marginBottom:10,paddingBottom:10,borderBottom:"1px dashed var(--surface2)" }}>
+                  ℹ️ Bahan Baku (PO): {fmt(bahanBakuPO)} — sudah tercermin di COGS, tidak dihitung lagi di sini
+                </div>
+              )}
               {[
-                ["🥩 Bahan Baku (PO)",bahanBakuPO],
                 ["👥 Gaji Karyawan",salaryTotal],
                 ...EXPENSE_CATEGORIES.filter(c=>!c.auto).map(c=>[c.icon+" "+c.label,catTotal(c.id)]),
               ].filter(([,v])=>v>0).map(([l,v])=>(
@@ -588,13 +599,17 @@ export default function Accounting() {
                 </span>
               </div>
             ))}
+            {bahanBakuPO>0 && (
+              <div style={{ fontSize:11,color:"#6B778C",fontStyle:"italic",padding:"6px 0" }}>
+                ℹ️ Bahan Baku (PO) periode ini: {fmt(bahanBakuPO)} — sudah termasuk di COGS di atas, tidak dihitung ulang di Beban Operasional
+              </div>
+            )}
           </div>
 
           {/* Opex */}
           <div style={{ marginBottom:16 }}>
             <div style={{ fontSize:11,fontWeight:800,color:"#FF8B00",textTransform:"uppercase",letterSpacing:"0.5px",marginBottom:8,paddingBottom:4,borderBottom:"2px solid #FF8B00" }}>BEBAN OPERASIONAL</div>
             {[
-              ["Bahan Baku (PO)",bahanBakuPO],
               ["Gaji Karyawan",salaryTotal],
               ...EXPENSE_CATEGORIES.filter(c=>!c.auto).map(c=>[c.label,catTotal(c.id)]),
               ["Total Beban",totalOpex],
@@ -648,9 +663,9 @@ export default function Accounting() {
           {/* Auto expenses summary */}
           <div style={{ display:"flex",flexDirection:"column",gap:10,marginBottom:16 }}>
             <div style={{ background:"#fff",border:"1px solid #f0f0f0",borderRadius:12,padding:"14px 16px" }}>
-              <div style={{ fontSize:11,fontWeight:700,color:"#6B778C",marginBottom:4 }}>🥩 BAHAN BAKU (AUTO)</div>
+              <div style={{ fontSize:11,fontWeight:700,color:"#6B778C",marginBottom:4 }}>📦 PEMBELIAN PO — SEMUA KATEGORI (AUTO)</div>
               <div style={{ fontSize:20,fontWeight:900,color:"#FF8B00" }}>{fmt(poTotal)}</div>
-              <div style={{ fontSize:11,color:"#6B778C" }}>{pos.length} purchase orders</div>
+              <div style={{ fontSize:11,color:"#6B778C" }}>{pos.length} purchase orders · termasuk {fmt(bahanBakuPO)} bahan baku (sudah di COGS, bukan beban operasional)</div>
             </div>
             <div style={{ background:"#fff",border:"1px solid #f0f0f0",borderRadius:12,padding:"14px 16px" }}>
               <div style={{ fontSize:11,fontWeight:700,color:"#6B778C",marginBottom:4 }}>👥 GAJI (AUTO)</div>

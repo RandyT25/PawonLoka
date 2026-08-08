@@ -90,44 +90,57 @@ export default function InvProduction() {
     }
 
     setSaving(true)
-    const batchId = "PRD-"+String(batches.length+1).padStart(3,"0")
-    await supabase.from("production_batches").insert({
-      id:batchId, item_id:form.item_id, item_name:item.name,
-      batch_qty:parseFloat(form.batch_qty), unit:form.unit||item.unit,
-      date:form.date, produced_by:form.produced_by, notes:form.notes||null,
-      ingredients_used, status:"Completed"
-    })
-    // Deduct used ingredients stock + log
-    for (const u of ingredients_used) {
-      const ing = ingredients.find(i=>i.id===u.ingredient_id)
-      if (!ing) continue
-      const qtyBase = toBaseUnit(ing, parseFloat(u.qty)||0, u.unit)
-      await supabase.from("ingredients").update({ stock:Math.max(0,(ing.stock||0)-qtyBase) }).eq("id",ing.id)
-      await supabase.from("stock_movements").insert({
+    try {
+      const batchId = "PRD-"+String(batches.length+1).padStart(3,"0")
+      const { error:batchErr } = await supabase.from("production_batches").insert({
+        id:batchId, item_id:form.item_id, item_name:item.name,
+        batch_qty:parseFloat(form.batch_qty), unit:form.unit||item.unit,
+        date:form.date, produced_by:form.produced_by, notes:form.notes||null,
+        ingredients_used, status:"Completed"
+      })
+      if (batchErr) throw batchErr
+      // Deduct used ingredients stock + log. Fresh-fetch each ingredient's stock right
+      // before writing rather than trusting the page-load snapshot, so a sale or another
+      // production batch that happened in between isn't silently overwritten.
+      for (const u of ingredients_used) {
+        const ing = ingredients.find(i=>i.id===u.ingredient_id)
+        if (!ing) continue
+        const qtyBase = toBaseUnit(ing, parseFloat(u.qty)||0, u.unit)
+        const { data:freshIng } = await supabase.from("ingredients").select("stock").eq("id",ing.id).maybeSingle()
+        const newStock = Math.max(0, (freshIng?.stock ?? ing.stock ?? 0) - qtyBase)
+        const { error:updErr } = await supabase.from("ingredients").update({ stock:newStock }).eq("id",ing.id)
+        if (updErr) throw updErr
+        const { error:movErr } = await supabase.from("stock_movements").insert({
+          id:"MOV-"+Date.now()+"-"+Math.random().toString(36).slice(2,6),
+          type:"Production", ingredient_id:ing.id, ingredient_name:ing.name,
+          qty:-qtyBase, unit:ing.unit, ref:batchId,
+          note:"Used in production: "+item.name,
+          date:form.date,
+          time:new Date().toLocaleTimeString("id-ID",{hour:"2-digit",minute:"2-digit"})
+        })
+        if (movErr) throw movErr
+      }
+      // Add to semi-finished stock + log (yield may be entered in a different unit than the item's base unit)
+      const yieldBase = toBaseUnit(item, parseFloat(form.batch_qty)||0, form.unit||item.unit)
+      const { data:freshItem } = await supabase.from("ingredients").select("stock").eq("id",item.id).maybeSingle()
+      const newItemStock = (freshItem?.stock ?? item.stock ?? 0) + yieldBase
+      const { error:itemUpdErr } = await supabase.from("ingredients").update({ stock:newItemStock }).eq("id",item.id)
+      if (itemUpdErr) throw itemUpdErr
+      const { error:yieldMovErr } = await supabase.from("stock_movements").insert({
         id:"MOV-"+Date.now()+"-"+Math.random().toString(36).slice(2,6),
-        type:"Production", ingredient_id:ing.id, ingredient_name:ing.name,
-        qty:-qtyBase, unit:ing.unit, ref:batchId,
-        note:"Used in production: "+item.name,
+        type:"Production", ingredient_id:item.id, ingredient_name:item.name,
+        qty:yieldBase, unit:item.unit, ref:batchId,
+        note:"Produced batch",
         date:form.date,
         time:new Date().toLocaleTimeString("id-ID",{hour:"2-digit",minute:"2-digit"})
       })
-    }
-    // Add to semi-finished stock + log (yield may be entered in a different unit than the item's base unit)
-    const yieldBase = toBaseUnit(item, parseFloat(form.batch_qty)||0, form.unit||item.unit)
-    await supabase.from("ingredients").update({ stock:(item.stock||0)+yieldBase }).eq("id",item.id)
-    await supabase.from("stock_movements").insert({
-      id:"MOV-"+Date.now()+"-"+Math.random().toString(36).slice(2,6),
-      type:"Production", ingredient_id:item.id, ingredient_name:item.name,
-      qty:yieldBase, unit:item.unit, ref:batchId,
-      note:"Produced batch",
-      date:form.date,
-      time:new Date().toLocaleTimeString("id-ID",{hour:"2-digit",minute:"2-digit"})
-    })
-    await load()
-    setModal(false)
-    setRecipeId(""); setUseRecipe(true)
-    setForm({ item_id:"", batch_qty:"", unit:"", date:new Date().toISOString().slice(0,10), produced_by:"", notes:"" })
-    setUsedItems([{ ingredient_id:"", qty:"", unit:"" }])
+      if (yieldMovErr) throw yieldMovErr
+      await load()
+      setModal(false)
+      setRecipeId(""); setUseRecipe(true)
+      setForm({ item_id:"", batch_qty:"", unit:"", date:new Date().toISOString().slice(0,10), produced_by:"", notes:"" })
+      setUsedItems([{ ingredient_id:"", qty:"", unit:"" }])
+    } catch(e) { alert("Error: "+e.message) }
     setSaving(false)
   }
 

@@ -57,18 +57,27 @@ export default function InvMovements() {
     const ing = ingredients.find(i => i.id === form.ingredient_id)
     if (!ing || !form.qty || !form.reason) { alert("Fill all fields"); return }
     setSaving(true)
-    const qty = parseFloat(form.qty)
-    await supabase.from("stock_movements").insert({
-      id:"MOV-"+Date.now(), type:"Adjustment",
-      ingredient_id:ing.id, ingredient_name:ing.name,
-      qty, unit:form.unit||ing.unit, ref:"MANUAL", note:form.reason,
-      date:new Date().toISOString().slice(0,10),
-      time:new Date().toLocaleTimeString("id-ID",{hour:"2-digit",minute:"2-digit"})
-    })
-    await supabase.from("ingredients").update({ stock:Math.max(0,(ing.stock||0)+qty) }).eq("id",ing.id)
-    await load()
-    setModal(false)
-    setForm({ ingredient_id:"", qty:"", unit:"", reason:"" })
+    try {
+      const qty = parseFloat(form.qty)
+      // Fetch fresh stock right before writing rather than trusting the page-load
+      // snapshot, so a sale/production that happened while this modal was open isn't
+      // silently overwritten.
+      const { data:freshIng } = await supabase.from("ingredients").select("stock").eq("id",ing.id).maybeSingle()
+      const newStock = Math.max(0, (freshIng?.stock ?? ing.stock ?? 0) + qty)
+      const { error:updErr } = await supabase.from("ingredients").update({ stock:newStock }).eq("id",ing.id)
+      if (updErr) throw updErr
+      const { error:movErr } = await supabase.from("stock_movements").insert({
+        id:"MOV-"+Date.now(), type:"Adjustment",
+        ingredient_id:ing.id, ingredient_name:ing.name,
+        qty, unit:form.unit||ing.unit, ref:"MANUAL", note:form.reason,
+        date:new Date().toISOString().slice(0,10),
+        time:new Date().toLocaleTimeString("id-ID",{hour:"2-digit",minute:"2-digit"})
+      })
+      if (movErr) throw movErr
+      await load()
+      setModal(false)
+      setForm({ ingredient_id:"", qty:"", unit:"", reason:"" })
+    } catch(e) { alert("Error: "+e.message) }
     setSaving(false)
   }
 

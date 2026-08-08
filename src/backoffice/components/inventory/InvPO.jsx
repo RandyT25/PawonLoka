@@ -134,6 +134,32 @@ async function persistPaidPOChanges(ingUpdates, movements) {
   ])
 }
 
+// Reverses the stock quantity a Paid PO added, for use when voiding it. Only quantity is
+// reversed — WAC is not un-computed, since later purchases/sales may have already layered
+// on top of it and there's no way to unwind that retroactively (same limitation every
+// real inventory system has for void-after-later-activity).
+function computeVoidPOChanges(po, ingMap) {
+  const ingUpdates = {}
+  const movements = []
+  for (const item of po.po_items||[]) {
+    const ing = ingMap[item.ingredient_id]
+    if (!ing || ing.track_stock === false) continue
+    const qtyBase = toBaseUnit(ing, parseFloat(item.qty), item.unit)
+    const newStock = Math.max(0, (parseFloat(ing.stock)||0) - qtyBase)
+    ingUpdates[ing.id] = { stock:newStock }
+    movements.push({
+      id:"MOV-"+Date.now()+"-"+Math.random().toString(36).slice(2,6),
+      type:"Purchase", ingredient_id:ing.id, ingredient_name:ing.name,
+      qty:-qtyBase, unit:ing.unit, ref:po.id,
+      note:`Void ${po.id}: reversed ${item.qty} ${item.unit}`,
+      date:new Date().toISOString().slice(0,10),
+      time:new Date().toLocaleTimeString("id-ID",{hour:"2-digit",minute:"2-digit"})
+    })
+    ingMap[ing.id] = { ...ing, stock:newStock }
+  }
+  return { ingUpdates, movements }
+}
+
 export default function InvPO() {
   const [pos,         setPOs]         = useState([])
   const [ingredients, setIngredients] = useState([])
@@ -363,11 +389,6 @@ export default function InvPO() {
     setSaving(false)
   }
 
-  async function voidPO(po) {
-    if (!confirm('Void this PO? Stock changes will NOT be reversed automatically.')) return
-    await supabase.from('purchase_orders').update({ status:'Void' }).eq('id', po.id)
-    await load()
-  }
   async function markPaid(po) {
     if (!confirm(`Mark ${po.id} as paid?`)) return
     const { data: freshIngs } = await supabase.from("ingredients").select("*")
@@ -384,8 +405,20 @@ export default function InvPO() {
   }
 
   async function voidPO(po) {
-    if (!confirm(`Void ${po.id}?`)) return
-    await supabase.from("purchase_orders").update({ status:"Void" }).eq("id", po.id)
+    if (po.status === "Paid") {
+      if (!confirm(`Void ${po.id}? Stock quantity received will be reversed. WAC/cost will NOT be recalculated retroactively.`)) return
+      const { data: freshIngs } = await supabase.from("ingredients").select("*")
+      const ingMap = {}
+      for (const i of freshIngs||[]) ingMap[i.id] = i
+      const { ingUpdates, movements } = computeVoidPOChanges(po, ingMap)
+      await Promise.all([
+        persistPaidPOChanges(ingUpdates, movements),
+        supabase.from("purchase_orders").update({ status:"Void" }).eq("id", po.id),
+      ])
+    } else {
+      if (!confirm(`Void ${po.id}?`)) return
+      await supabase.from("purchase_orders").update({ status:"Void" }).eq("id", po.id)
+    }
     await load(); setViewModal(null)
   }
 

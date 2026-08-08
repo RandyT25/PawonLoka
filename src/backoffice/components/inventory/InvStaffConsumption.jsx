@@ -45,28 +45,37 @@ export default function InvStaffConsumption() {
     const ing = ingredients.find(i=>i.id===form.ingredient_id)
     if (!ing || !form.qty) { alert("Select ingredient and quantity"); return }
     setSaving(true)
-    const csmId = "CSM-"+String(records.length+1).padStart(3,"0")
-    await supabase.from("staff_consumption").insert({
-      id:csmId, date:form.date, ingredient_id:ing.id, ingredient_name:ing.name,
-      qty:parseFloat(form.qty), unit:form.unit||ing.unit,
-      cost:costPreview,
-      consumed_by:form.consumed_by||null, notes:form.notes||null
-    })
-    // Deduct from stock
-    await supabase.from("ingredients").update({ stock:Math.max(0,(ing.stock||0)-parseFloat(form.qty)) }).eq("id",ing.id)
-    // Log movement
-    await supabase.from("stock_movements").insert({
-      id:"MOV-"+Date.now()+"-"+Math.random().toString(36).slice(2,6),
-      type:"Staff Meal", ingredient_id:ing.id, ingredient_name:ing.name,
-      qty:-parseFloat(form.qty), unit:form.unit||ing.unit, ref:csmId,
-      note:"Staff meal"+(form.consumed_by?" by "+form.consumed_by:"")+(form.notes?" — "+form.notes:""),
-      date:form.date,
-      time:new Date().toLocaleTimeString("id-ID",{hour:"2-digit",minute:"2-digit"})
-    })
-    await load()
-    setModal(false)
-    setForm({ ingredient_id:"", qty:"", unit:"", date:new Date().toISOString().slice(0,10), consumed_by:"", notes:"" })
-    setCostPreview(0)
+    try {
+      const csmId = "CSM-"+String(records.length+1).padStart(3,"0")
+      const qty = parseFloat(form.qty)
+      const { error:csmErr } = await supabase.from("staff_consumption").insert({
+        id:csmId, date:form.date, ingredient_id:ing.id, ingredient_name:ing.name,
+        qty, unit:form.unit||ing.unit,
+        cost:costPreview,
+        consumed_by:form.consumed_by||null, notes:form.notes||null
+      })
+      if (csmErr) throw csmErr
+      // Fetch fresh stock right before writing rather than trusting the page-load
+      // snapshot, so a sale/production that happened while this modal was open isn't
+      // silently overwritten.
+      const { data:freshIng } = await supabase.from("ingredients").select("stock").eq("id",ing.id).maybeSingle()
+      const newStock = Math.max(0, (freshIng?.stock ?? ing.stock ?? 0) - qty)
+      const { error:updErr } = await supabase.from("ingredients").update({ stock:newStock }).eq("id",ing.id)
+      if (updErr) throw updErr
+      const { error:movErr } = await supabase.from("stock_movements").insert({
+        id:"MOV-"+Date.now()+"-"+Math.random().toString(36).slice(2,6),
+        type:"Staff Meal", ingredient_id:ing.id, ingredient_name:ing.name,
+        qty:-qty, unit:form.unit||ing.unit, ref:csmId,
+        note:"Staff meal"+(form.consumed_by?" by "+form.consumed_by:"")+(form.notes?" — "+form.notes:""),
+        date:form.date,
+        time:new Date().toLocaleTimeString("id-ID",{hour:"2-digit",minute:"2-digit"})
+      })
+      if (movErr) throw movErr
+      await load()
+      setModal(false)
+      setForm({ ingredient_id:"", qty:"", unit:"", date:new Date().toISOString().slice(0,10), consumed_by:"", notes:"" })
+      setCostPreview(0)
+    } catch(e) { alert("Error: "+e.message) }
     setSaving(false)
   }
 

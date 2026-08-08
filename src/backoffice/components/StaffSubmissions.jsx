@@ -42,6 +42,7 @@ export default function StaffSubmissions() {
   const [typeFilter,  setTypeFilter]  = useState("all")
   const [statusFilter,setStatusFilter]= useState("all")
   const [viewModal,   setViewModal]   = useState(null)
+  const [liveStock,   setLiveStock]   = useState({}) // ingredient_id -> fresh stock, fetched when opening an opname review
   const [editModal,   setEditModal]   = useState(null)
   const [editData,    setEditData]    = useState(null)
   const [loading,     setLoading]     = useState(true)
@@ -200,7 +201,12 @@ export default function StaffSubmissions() {
         const d = sub.data
         const ing = ingredients.find(i=>i.id===d.ingredient_id)
         if (ing) {
-          await supabase.from("ingredients").update({ stock:Math.max(0,(ing.stock||0)-d.qty) }).eq("id",ing.id)
+          // Fresh-fetch stock right before writing — approval can happen long after
+          // submission, and sales/production in between shouldn't be silently clobbered.
+          const { data:freshIng } = await supabase.from("ingredients").select("stock").eq("id",ing.id).maybeSingle()
+          const newStock = Math.max(0, (freshIng?.stock ?? ing.stock ?? 0) - d.qty)
+          const { error:stockErr } = await supabase.from("ingredients").update({ stock:newStock }).eq("id",ing.id)
+          if (stockErr) throw stockErr
           const { error:wstErr } = await supabase.from("waste_records").insert({
             id:"WST-"+Date.now(), date:new Date().toISOString().slice(0,10),
             ingredient_id:d.ingredient_id, ingredient_name:d.ingredient_name,
@@ -221,7 +227,12 @@ export default function StaffSubmissions() {
         const d = sub.data
         const ing = ingredients.find(i=>i.id===d.ingredient_id)
         if (ing) {
-          await supabase.from("ingredients").update({ stock:Math.max(0,(ing.stock||0)-d.qty) }).eq("id",ing.id)
+          // Fresh-fetch stock right before writing — approval can happen long after
+          // submission, and sales/production in between shouldn't be silently clobbered.
+          const { data:freshIng } = await supabase.from("ingredients").select("stock").eq("id",ing.id).maybeSingle()
+          const newStock = Math.max(0, (freshIng?.stock ?? ing.stock ?? 0) - d.qty)
+          const { error:stockErr } = await supabase.from("ingredients").update({ stock:newStock }).eq("id",ing.id)
+          if (stockErr) throw stockErr
           const { error:csmErr } = await supabase.from("staff_consumption").insert({
             id:"CSM-"+Date.now(), date:new Date().toISOString().slice(0,10),
             ingredient_id:d.ingredient_id, ingredient_name:d.ingredient_name,
@@ -248,8 +259,13 @@ export default function StaffSubmissions() {
           const ing = ingredients.find(i=>i.id===u.ingredient_id)
           if (ing) {
             const qtyBase = toBaseUnit(ing, u.qty||0, u.unit)
-            await supabase.from("ingredients").update({ stock:Math.max(0,(ing.stock||0)-qtyBase) }).eq("id",ing.id)
-            await supabase.from("stock_movements").insert({
+            // Fresh-fetch stock right before writing — approval can happen long after
+            // submission, and sales/production in between shouldn't be silently clobbered.
+            const { data:freshIng } = await supabase.from("ingredients").select("stock").eq("id",ing.id).maybeSingle()
+            const newStock = Math.max(0, (freshIng?.stock ?? ing.stock ?? 0) - qtyBase)
+            const { error:stockErr } = await supabase.from("ingredients").update({ stock:newStock }).eq("id",ing.id)
+            if (stockErr) throw stockErr
+            const { error:movErr } = await supabase.from("stock_movements").insert({
               id:"MOV-"+Date.now()+"-"+Math.random().toString(36).slice(2,6),
               type:"Production", ingredient_id:ing.id, ingredient_name:ing.name,
               qty:-qtyBase, unit:ing.unit, ref:sub.id,
@@ -257,11 +273,15 @@ export default function StaffSubmissions() {
               date:new Date().toISOString().slice(0,10),
               time:new Date().toLocaleTimeString("id-ID",{hour:"2-digit",minute:"2-digit"})
             })
+            if (movErr) throw movErr
           }
         }
         if (item) {
           const producedQtyBase = toBaseUnit(item, producedQty||0, d.yield_unit||d.unit||item.unit)
-          await supabase.from("ingredients").update({ stock:(item.stock||0)+producedQtyBase }).eq("id",item.id)
+          const { data:freshItem } = await supabase.from("ingredients").select("stock").eq("id",item.id).maybeSingle()
+          const newItemStock = (freshItem?.stock ?? item.stock ?? 0) + producedQtyBase
+          const { error:itemErr } = await supabase.from("ingredients").update({ stock:newItemStock }).eq("id",item.id)
+          if (itemErr) throw itemErr
           const { error:prodErr } = await supabase.from("production_batches").insert({
             id:"PRD-"+Date.now(), item_id:item.id, item_name:d.item_name,
             batch_qty:producedQty, unit:d.yield_unit||d.unit, date:(sub.submitted_at||new Date().toISOString()).slice(0,10),
@@ -379,6 +399,24 @@ export default function StaffSubmissions() {
     await supabase.from("staff_submissions").delete().eq("id",sub.id)
     setSubmissions(prev => prev.filter(s => s.id !== sub.id))
     setViewModal(null)
+  }
+
+  // Opens the review modal and, for opname submissions, fetches each involved
+  // ingredient's CURRENT stock — the submission's own `system_qty` is a snapshot from
+  // whenever the count was taken, which can be stale by the time a manager reviews/
+  // approves it. Showing the live value lets them see what stock will actually become
+  // instead of being surprised after clicking Approve.
+  async function openViewModal(sub) {
+    setViewModal(sub)
+    if (sub.type === "opname") {
+      const ids = (sub.data.items||[]).map(i=>i.ingredient_id).filter(Boolean)
+      if (ids.length) {
+        const { data } = await supabase.from("ingredients").select("id,stock").in("id", ids)
+        const map = {}
+        for (const row of data||[]) map[row.id] = row.stock
+        setLiveStock(map)
+      }
+    }
   }
 
   function toggleSelect(id) {
@@ -538,7 +576,7 @@ export default function StaffSubmissions() {
                     <td><span className={"bo-badge "+(s.status==="pending"?"bo-badge-amber":s.status==="approved"?"bo-badge-green":"bo-badge-red")}>{s.status}</span></td>
                     <td>
                       <div style={{ display:"flex", gap:4 }}>
-                        <button onClick={()=>setViewModal(s)} className="bo-btn bo-btn-ghost bo-btn-sm">View</button>
+                        <button onClick={()=>openViewModal(s)} className="bo-btn bo-btn-ghost bo-btn-sm">View</button>
                         <button onClick={()=>openEdit(s)} className="bo-btn bo-btn-ghost bo-btn-sm" style={{ color:"var(--brand)" }}>Edit</button>
                         {s.status==="pending" && <>
                           <button onClick={()=>approve(s)} disabled={processing} className="bo-btn bo-btn-sm" style={{ background:"var(--green-lt)", color:"var(--green)", border:"none", cursor:"pointer", borderRadius:"var(--r)", padding:"5px 11px", fontSize:12, fontWeight:600 }}>Approve</button>
@@ -573,20 +611,31 @@ export default function StaffSubmissions() {
                 const totalVariance = (viewModal.data.items||[]).reduce((a,item)=>a+(item.diff*(ingredients.find(x=>x.id===item.ingredient_id)?.cost_per_unit||0)),0)
                 return (
                 <div style={{ overflowX:"auto" }}>
+                {viewModal.status==="pending" && (
+                  <div style={{ fontSize:11, color:"var(--ink5)", fontStyle:"italic", marginBottom:10 }}>
+                    ℹ️ "System" is the stock level when this count was taken. If sales/production happened
+                    since then, "Live Now" shows current stock and "Will Become" shows what approving will
+                    actually set it to (live + counted diff) — not the counted "Actual" number directly.
+                  </div>
+                )}
                 <table className="bo-table">
-                  <thead><tr><th>Ingredient</th><th>System</th><th>Actual</th><th>Diff</th><th>Unit Price</th><th>Value</th><th>Variance</th></tr></thead>
+                  <thead><tr><th>Ingredient</th><th>System</th><th>Actual</th><th>Diff</th><th>Live Now</th><th>Will Become</th><th>Unit Price</th><th>Value</th><th>Variance</th></tr></thead>
                   <tbody>
                     {(viewModal.data.items||[]).map((item,i)=>{
                       const foundIng = ingredients.find(x=>x.id===item.ingredient_id)
                       const unitPrice = foundIng?.cost_per_unit||0
                       const value = item.actual_qty*unitPrice
                       const variance = item.diff*unitPrice
+                      const live = liveStock[item.ingredient_id]
+                      const willBecome = live!=null ? Math.max(0, live + item.diff) : null
                       return (
                         <tr key={i}>
                           <td style={{ fontWeight:600 }}>{item.name}</td>
                           <td>{item.system_qty} {item.unit}</td>
                           <td style={{ fontWeight:700 }}>{item.actual_qty} {item.unit}</td>
                           <td style={{ color:item.diff<0?"var(--red)":item.diff>0?"var(--green)":"var(--ink5)", fontWeight:700 }}>{item.diff>0?"+":""}{Number(item.diff).toLocaleString("id-ID",{minimumFractionDigits:2,maximumFractionDigits:2})}</td>
+                          <td style={{ color:live!=null&&live!==item.system_qty?"var(--amber)":"var(--ink5)" }}>{live!=null?live+" "+item.unit:"—"}</td>
+                          <td style={{ fontWeight:700 }}>{willBecome!=null?willBecome+" "+item.unit:"—"}</td>
                           {foundIng ? <>
                             <td>{fmt(unitPrice)}</td>
                             <td>{fmt(value)}</td>
@@ -598,7 +647,7 @@ export default function StaffSubmissions() {
                   </tbody>
                   <tfoot>
                     <tr>
-                      <td colSpan={5} style={{ textAlign:"right", fontWeight:700 }}>Total</td>
+                      <td colSpan={7} style={{ textAlign:"right", fontWeight:700 }}>Total</td>
                       <td style={{ fontWeight:800 }}>{fmt(totalValue)}</td>
                       <td style={{ fontWeight:800, color:totalVariance<0?"var(--red)":totalVariance>0?"var(--green)":"var(--ink5)" }}>{totalVariance>0?"+":""}{fmt(totalVariance)}</td>
                     </tr>
