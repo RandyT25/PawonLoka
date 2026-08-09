@@ -131,8 +131,9 @@ export default function StaffPortal() {
   const [done,         setDone]         = useState(false)
   const [opnameCounts, setOpnameCounts] = useState([])
   const [opnameSearch, setOpnameSearch] = useState("")
+  const [opnameDate,   setOpnameDate]   = useState(new Date().toISOString().slice(0,10))
   const [staffName,    setStaffName]    = useState("")
-  const [wasteForm,    setWasteForm]    = useState({ ingredient_id:"", qty:"", reason:"Expired", notes:"" })
+  const [wasteForm,    setWasteForm]    = useState({ ingredient_id:"", qty:"", reason:"Expired", notes:"", date:new Date().toISOString().slice(0,10) })
   const [consumptionForm, setConsumptionForm] = useState({ ingredient_id:"", qty:"", notes:"", date:new Date().toISOString().slice(0,10) })
   const [prodSubId,    setProdSubId]    = useState("")
   const [prodBatchQty, setProdBatchQty] = useState("")
@@ -140,6 +141,7 @@ export default function StaffPortal() {
   const [prodYieldUnit,setProdYieldUnit]= useState("")
   const [prodUsed,     setProdUsed]     = useState([])
   const [prodNotes,    setProdNotes]    = useState("")
+  const [prodDate,     setProdDate]     = useState(new Date().toISOString().slice(0,10))
   const [reqDate,      setReqDate]      = useState(new Date().toISOString().slice(0,10))
   const [reqNotes,     setReqNotes]     = useState("")
   const [reqItems,     setReqItems]     = useState([{ ingredient_id:"", qty:"", unit:"" }])
@@ -223,7 +225,7 @@ export default function StaffPortal() {
   async function submitOpname() {
     const filled = opnameCounts.filter(i=>i.actual_qty!=="")
     if (!filled.length) { alert("Enter at least one count"); return }
-    await submit("opname", { items:filled.map(i=>{
+    await submit("opname", { date:opnameDate||new Date().toISOString().slice(0,10), items:filled.map(i=>{
       const enteredQty = parseFloat(i.actual_qty)||0
       const ing = ingredients.find(x=>x.id===i.ingredient_id)
       const actual_qty = toBaseUnit(ing, enteredQty, i.input_unit||i.unit)
@@ -234,7 +236,7 @@ export default function StaffPortal() {
   async function submitWaste() {
     const ing = ingredients.find(i=>i.id===wasteForm.ingredient_id)
     if (!ing||!wasteForm.qty) { alert("Select ingredient and quantity"); return }
-    await submit("waste", { ingredient_id:ing.id, ingredient_name:ing.name, qty:parseFloat(wasteForm.qty), unit:ing.unit, reason:wasteForm.reason, notes:wasteForm.notes, estimated_cost:(parseFloat(wasteForm.qty)||0)*(ing.cost_per_unit||0) })
+    await submit("waste", { ingredient_id:ing.id, ingredient_name:ing.name, qty:parseFloat(wasteForm.qty), unit:ing.unit, reason:wasteForm.reason, notes:wasteForm.notes, date:wasteForm.date||new Date().toISOString().slice(0,10), estimated_cost:(parseFloat(wasteForm.qty)||0)*(ing.cost_per_unit||0) })
   }
 
   async function submitConsumption() {
@@ -260,6 +262,7 @@ export default function StaffPortal() {
       actual_yield: Math.round((sub?.yield_qty||1) * batches * 100)/100,
       yield_unit: sub?.yield_unit || sub?.unit || "gr",
       notes: prodNotes,
+      date: prodDate||new Date().toISOString().slice(0,10),
       needs_recipe_review: false,
       ingredients_used
     })
@@ -276,9 +279,11 @@ export default function StaffPortal() {
 
   function reset(forceHome) {
     setDone(false); setScreen(forceHome || station ? "home" : "consumption"); setStaffName(""); setOpnameSearch("")
-    setWasteForm({ ingredient_id:"", qty:"", reason:"Expired", notes:"" })
+    setOpnameDate(new Date().toISOString().slice(0,10))
+    setWasteForm({ ingredient_id:"", qty:"", reason:"Expired", notes:"", date:new Date().toISOString().slice(0,10) })
     setConsumptionForm({ ingredient_id:"", qty:"", notes:"", date:new Date().toISOString().slice(0,10) })
     setProdSubId(""); setProdBatchQty(""); setProdYield(""); setProdYieldUnit(""); setProdUsed([]); setProdNotes("")
+    setProdDate(new Date().toISOString().slice(0,10))
     setReqDate(new Date().toISOString().slice(0,10)); setReqNotes(""); setReqItems([{ ingredient_id:"", qty:"", unit:"" }])
     if ((stationStaff[station]||[]).length === 1) setStaffName(stationStaff[station][0])
   }
@@ -398,6 +403,10 @@ export default function StaffPortal() {
           <div style={{ ...s.card, marginBottom:10 }}>
             <StaffPicker color={stationColor} value={staffName} onChange={setStaffName} staffList={stationStaff[station]||[]} />
           </div>
+          <div style={{ ...s.card, marginBottom:10 }}>
+            <label style={s.label}>Count Date *</label>
+            <input type="date" value={opnameDate} onChange={e=>setOpnameDate(e.target.value)} style={s.input} max={new Date().toISOString().slice(0,10)} />
+          </div>
           <div style={{ ...s.card, padding:"10px 12px", marginBottom:10, display:"flex", alignItems:"center", gap:8 }}>
             <span style={{ fontSize:16 }}>🔍</span>
             <input value={opnameSearch} onChange={e=>setOpnameSearch(e.target.value)} placeholder="Search ingredient..." style={{ ...s.input, border:"none", padding:"4px 0", fontSize:14, flex:1 }} />
@@ -448,6 +457,10 @@ export default function StaffPortal() {
       <div style={s.body}>
         <div style={s.card}>
           <StaffPicker color={stationColor} value={staffName} onChange={setStaffName} staffList={stationStaff[station]||[]} />
+        </div>
+        <div style={s.card}>
+          <label style={s.label}>Date *</label>
+          <input type="date" value={wasteForm.date} onChange={e=>setWasteForm(f=>({...f,date:e.target.value}))} style={s.input} max={new Date().toISOString().slice(0,10)} />
         </div>
         <div style={s.card}>
           <label style={s.label}>Ingredient / Sub-Recipe *</label>
@@ -530,6 +543,12 @@ export default function StaffPortal() {
           {/* Staff */}
           <div style={s.card}>
             <StaffPicker color={stationColor} value={staffName} onChange={setStaffName} staffList={stationStaff[station]||[]} />
+          </div>
+
+          {/* Date */}
+          <div style={s.card}>
+            <label style={s.label}>Tanggal Produksi *</label>
+            <input type="date" value={prodDate} onChange={e=>setProdDate(e.target.value)} style={s.input} max={new Date().toISOString().slice(0,10)} />
           </div>
 
           {/* Step 1 — Recipe selector */}

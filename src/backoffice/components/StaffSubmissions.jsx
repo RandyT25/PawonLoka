@@ -170,6 +170,10 @@ export default function StaffSubmissions() {
   // Throws on error — callers decide how to surface it (alert vs. collecting into a batch summary).
   async function approveOne(sub) {
       if (sub.type==="opname") {
+        // Use the date staff picked when counting (falls back to submission date for
+        // older submissions predating the picker) — not today's date, since approval
+        // can happen well after the count was actually taken.
+        const countDate = sub.data.date || (sub.submitted_at||new Date().toISOString()).slice(0,10)
         for (const item of sub.data.items||[]) {
           // Apply the counted DIFFERENCE on top of current live stock (not an overwrite) — approvals
           // often happen days after the physical count, and sales/production in between must not be erased.
@@ -182,13 +186,13 @@ export default function StaffSubmissions() {
             type:"Adjustment", ingredient_id:item.ingredient_id, ingredient_name:item.name,
             qty:item.diff, unit:item.unit, ref:sub.id,
             note:"Staff opname by "+sub.submitted_by,
-            date:new Date().toISOString().slice(0,10),
+            date:countDate,
             time:new Date().toLocaleTimeString("id-ID",{hour:"2-digit",minute:"2-digit"})
           })
           if (movErr) throw movErr
         }
         const { error:opnErr } = await supabase.from("stock_opname").insert({
-          id:"OPN-"+Date.now(), date:(sub.submitted_at||new Date().toISOString()).slice(0,10),
+          id:"OPN-"+Date.now(), date:countDate,
           status:"Completed",
           items:sub.data.items.map(i=>{
             const cost = ingredients.find(x=>x.id===i.ingredient_id)?.cost_per_unit||0
@@ -200,6 +204,10 @@ export default function StaffSubmissions() {
       } else if (sub.type==="waste") {
         const d = sub.data
         const ing = ingredients.find(i=>i.id===d.ingredient_id)
+        // Use the date staff picked when reporting (falls back to submission date for
+        // older submissions predating the picker) — not today's date, since approval
+        // can happen well after the waste actually happened.
+        const wasteDate = d.date || (sub.submitted_at||new Date().toISOString()).slice(0,10)
         if (ing) {
           // Fresh-fetch stock right before writing — approval can happen long after
           // submission, and sales/production in between shouldn't be silently clobbered.
@@ -208,7 +216,7 @@ export default function StaffSubmissions() {
           const { error:stockErr } = await supabase.from("ingredients").update({ stock:newStock }).eq("id",ing.id)
           if (stockErr) throw stockErr
           const { error:wstErr } = await supabase.from("waste_records").insert({
-            id:"WST-"+Date.now(), date:new Date().toISOString().slice(0,10),
+            id:"WST-"+Date.now(), date:wasteDate,
             ingredient_id:d.ingredient_id, ingredient_name:d.ingredient_name,
             qty:d.qty, unit:d.unit, reason:d.reason, cost:d.estimated_cost,
             recorded_by:sub.submitted_by, notes:d.notes||null
@@ -219,7 +227,7 @@ export default function StaffSubmissions() {
             type:"Waste", ingredient_id:d.ingredient_id, ingredient_name:d.ingredient_name,
             qty:-d.qty, unit:d.unit, ref:sub.id,
             note:"Staff waste by "+sub.submitted_by+": "+d.reason,
-            date:new Date().toISOString().slice(0,10),
+            date:wasteDate,
             time:new Date().toLocaleTimeString("id-ID",{hour:"2-digit",minute:"2-digit"})
           })
         }
@@ -259,6 +267,10 @@ export default function StaffSubmissions() {
         const outputIngredientId = d.item_id || subRecipes.find(sr=>sr.id===d.sub_recipe_id)?.ingredient_id
         const item = outputIngredientId ? ingredients.find(i=>i.id===outputIngredientId) : null
         const producedQty = d.actual_yield ?? d.batch_qty
+        // Use the date staff picked when producing (falls back to submission date for
+        // older submissions predating the picker) — not today's date, since approval
+        // can happen well after the batch was actually made.
+        const producedDate = d.date || (sub.submitted_at||new Date().toISOString()).slice(0,10)
         for (const u of d.ingredients_used||[]) {
           const ing = ingredients.find(i=>i.id===u.ingredient_id)
           if (ing) {
@@ -274,7 +286,7 @@ export default function StaffSubmissions() {
               type:"Production", ingredient_id:ing.id, ingredient_name:ing.name,
               qty:-qtyBase, unit:ing.unit, ref:sub.id,
               note:"Production: "+d.item_name+" by "+sub.submitted_by,
-              date:new Date().toISOString().slice(0,10),
+              date:producedDate,
               time:new Date().toLocaleTimeString("id-ID",{hour:"2-digit",minute:"2-digit"})
             })
             if (movErr) throw movErr
@@ -288,7 +300,7 @@ export default function StaffSubmissions() {
           if (itemErr) throw itemErr
           const { error:prodErr } = await supabase.from("production_batches").insert({
             id:"PRD-"+Date.now(), item_id:item.id, item_name:d.item_name,
-            batch_qty:producedQty, unit:d.yield_unit||d.unit, date:(sub.submitted_at||new Date().toISOString()).slice(0,10),
+            batch_qty:producedQty, unit:d.yield_unit||d.unit, date:producedDate,
             produced_by:sub.submitted_by, notes:d.notes||null,
             ingredients_used:d.ingredients_used, status:"Completed",
             submission_id: sub.id,
@@ -374,6 +386,7 @@ export default function StaffSubmissions() {
       unit: newData.yield_unit || newData.unit || batchRow.unit,
       ingredients_used: newUsed,
       notes: newData.notes ?? batchRow.notes,
+      date: newData.date || batchRow.date,
     }).eq("id", batchRow.id)
     if (prodUpdErr) throw prodUpdErr
   }
@@ -615,6 +628,7 @@ export default function StaffSubmissions() {
                 const totalVariance = (viewModal.data.items||[]).reduce((a,item)=>a+(item.diff*(ingredients.find(x=>x.id===item.ingredient_id)?.cost_per_unit||0)),0)
                 return (
                 <div style={{ overflowX:"auto" }}>
+                <div style={{ fontSize:12, color:"var(--ink4)", marginBottom:10 }}>Count Date: <strong>{viewModal.data.date||"—"}</strong></div>
                 {viewModal.status==="pending" && (
                   <div style={{ fontSize:11, color:"var(--ink5)", fontStyle:"italic", marginBottom:10 }}>
                     ℹ️ "System" is the stock level when this count was taken. If sales/production happened
@@ -662,7 +676,7 @@ export default function StaffSubmissions() {
               })()}
               {viewModal.type==="waste" && (
                 <div style={{ display:"grid", gap:14 }}>
-                  {[["Ingredient",viewModal.data.ingredient_name],["Quantity",viewModal.data.qty+" "+viewModal.data.unit],["Reason",viewModal.data.reason],["Est. Cost",fmt(viewModal.data.estimated_cost)],["Notes",viewModal.data.notes||"—"]].map(([k,v])=>(
+                  {[["Date",viewModal.data.date||"—"],["Ingredient",viewModal.data.ingredient_name],["Quantity",viewModal.data.qty+" "+viewModal.data.unit],["Reason",viewModal.data.reason],["Est. Cost",fmt(viewModal.data.estimated_cost)],["Notes",viewModal.data.notes||"—"]].map(([k,v])=>(
                     <div key={k}><div style={{ fontSize:11, color:"var(--ink4)", fontWeight:700, textTransform:"uppercase" }}>{k}</div><div style={{ fontWeight:600, marginTop:3 }}>{v}</div></div>
                   ))}
                 </div>
@@ -752,7 +766,8 @@ export default function StaffSubmissions() {
                 const prodTotal = used.reduce((a,u)=>a+(u.qty*unitPriceFor(ingredients.find(x=>x.id===u.ingredient_id),u.unit)),0)
                 return (
                 <div>
-                  <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:12, marginBottom:16 }}>
+                  <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr 1fr", gap:12, marginBottom:16 }}>
+                    <div><div style={{ fontSize:11, color:"var(--ink4)", fontWeight:700, textTransform:"uppercase" }}>Date</div><div style={{ fontWeight:700, marginTop:3 }}>{viewModal.data.date||"—"}</div></div>
                     <div><div style={{ fontSize:11, color:"var(--ink4)", fontWeight:700, textTransform:"uppercase" }}>Produced</div><div style={{ fontWeight:700, color:"var(--green)", marginTop:3 }}>{viewModal.data.item_name}</div></div>
                     <div><div style={{ fontSize:11, color:"var(--ink4)", fontWeight:700, textTransform:"uppercase" }}>Batches</div><div style={{ fontWeight:700, marginTop:3 }}>{viewModal.data.batch_qty ?? "—"}× resep</div></div>
                     <div><div style={{ fontSize:11, color:"var(--ink4)", fontWeight:700, textTransform:"uppercase" }}>Quantity</div><div style={{ fontWeight:700, marginTop:3 }}>{viewModal.data.actual_yield??viewModal.data.batch_qty} {viewModal.data.yield_unit||viewModal.data.unit}</div></div>
@@ -820,6 +835,10 @@ export default function StaffSubmissions() {
                 const totalVariance = (editData.items||[]).reduce((a,item)=>a+(((parseFloat(item.actual_qty)||0)-item.system_qty)*(ingredients.find(x=>x.id===item.ingredient_id)?.cost_per_unit||0)),0)
                 return (
                 <div>
+                  <div style={{ marginBottom:12 }}>
+                    <label className="bo-label">Count Date</label>
+                    <input type="date" value={editData.date||""} onChange={e=>setEditData(d=>({...d,date:e.target.value}))} className="bo-input" />
+                  </div>
                   <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
                     <label className="bo-label" style={{marginBottom:0}}>Stock Counts</label>
                     <button onClick={()=>setEditData(d=>({...d,items:[...(d.items||[]),{ingredient_id:"",name:"",unit:"",system_qty:0,actual_qty:0,diff:0}]}))}
@@ -862,6 +881,8 @@ export default function StaffSubmissions() {
 
               {editModal.type==="waste" && (
                 <div style={{ display:"grid", gap:12 }}>
+                  <div><label className="bo-label">Date</label>
+                    <input type="date" value={editData.date||""} onChange={e=>setEditData(d=>({...d,date:e.target.value}))} className="bo-input" /></div>
                   <div><label className="bo-label">Quantity</label>
                     <input type="number" value={editData.qty||""} onChange={e=>setEditData(d=>({...d,qty:e.target.value}))} className="bo-input" /></div>
                   <div><label className="bo-label">Reason</label>
@@ -927,6 +948,10 @@ export default function StaffSubmissions() {
                       ⚠ This batch was already approved. Changing the batch quantity here will immediately adjust live ingredient stock and the linked production record — not just this submission's record.
                     </div>
                   )}
+                  <div>
+                    <label className="bo-label">Date</label>
+                    <input type="date" value={editData.date||""} onChange={e=>setEditData(d=>({...d,date:e.target.value}))} className="bo-input" />
+                  </div>
                   <div>
                     <label className="bo-label" style={{ fontSize:13, fontWeight:800, color:"var(--ink1)" }}>Batch Quantity (× resep)</label>
                     <input type="number" value={editData.batch_qty||""} onChange={e=>{
