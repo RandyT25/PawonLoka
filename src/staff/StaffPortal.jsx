@@ -102,15 +102,15 @@ function SearchableSelect({ options, value, onChange, placeholder, labelKey="nam
   )
 }
 
-function StaffPicker({ station, value, onChange, staffList }) {
+function StaffPicker({ color, value, onChange, staffList }) {
   return (
     <div>
       <div style={{ fontSize:12, fontWeight:700, color:"#666", marginBottom:8, textTransform:"uppercase", letterSpacing:"0.4px" }}>Submitted By *</div>
       <div style={{ display:"flex", gap:8, flexWrap:"wrap" }}>
         {staffList.map(name => (
           <button key={name} type="button" onClick={()=>onChange(name)}
-            style={{ padding:"8px 18px", borderRadius:20, border:`2px solid ${value===name ? STATIONS[station].color : "#e0e0e0"}`,
-              background: value===name ? STATIONS[station].color : "#fff",
+            style={{ padding:"8px 18px", borderRadius:20, border:`2px solid ${value===name ? color : "#e0e0e0"}`,
+              background: value===name ? color : "#fff",
               color: value===name ? "#fff" : "#333",
               fontWeight:700, fontSize:14, cursor:"pointer", fontFamily:"inherit", transition:"all 0.15s" }}>
             {name}
@@ -144,8 +144,9 @@ export default function StaffPortal() {
   const [reqNotes,     setReqNotes]     = useState("")
   const [reqItems,     setReqItems]     = useState([{ ingredient_id:"", qty:"", unit:"" }])
   const [stationStaff, setStationStaff] = useState({})
+  const [allStaff,     setAllStaff]     = useState([])
 
-  useEffect(() => { loadStaff() }, [])
+  useEffect(() => { loadStaff(); loadData() }, [])
   useEffect(() => { if (station) loadData() }, [station])
 
   function buildStationStaff(rows) {
@@ -156,12 +157,16 @@ export default function StaffPortal() {
     return map
   }
 
+  function buildAllStaff(rows) {
+    return [...new Set(rows.map(r=>r.name))].sort()
+  }
+
   async function loadStaff() {
     const cached = await offlineStore.getCache('staff')
-    if (cached?.length) setStationStaff(buildStationStaff(cached))
+    if (cached?.length) { setStationStaff(buildStationStaff(cached)); setAllStaff(buildAllStaff(cached)) }
     try {
       const { data } = await supabase.from("staff").select("name,role,active").eq("active", true)
-      if (data) { setStationStaff(buildStationStaff(data)); offlineStore.setCache('staff', data) }
+      if (data) { setStationStaff(buildStationStaff(data)); setAllStaff(buildAllStaff(data)); offlineStore.setCache('staff', data) }
     } catch { /* offline — cached already applied */ }
   }
 
@@ -269,8 +274,8 @@ export default function StaffPortal() {
     })
   }
 
-  function reset() {
-    setDone(false); setScreen("home"); setStaffName(""); setOpnameSearch("")
+  function reset(forceHome) {
+    setDone(false); setScreen(forceHome || station ? "home" : "consumption"); setStaffName(""); setOpnameSearch("")
     setWasteForm({ ingredient_id:"", qty:"", reason:"Expired", notes:"" })
     setConsumptionForm({ ingredient_id:"", qty:"", notes:"" })
     setProdSubId(""); setProdBatchQty(""); setProdYield(""); setProdYieldUnit(""); setProdUsed([]); setProdNotes("")
@@ -278,7 +283,7 @@ export default function StaffPortal() {
     if ((stationStaff[station]||[]).length === 1) setStaffName(stationStaff[station][0])
   }
 
-  const stationColor = station ? STATIONS[station].color : "#1a1a2e"
+  const stationColor = station ? STATIONS[station].color : "#F59E0B"
 
   const s = {
     wrap:{ height:"100dvh", display:"flex", flexDirection:"column", background:"#f5f6fa", fontFamily:"system-ui,sans-serif", fontSize:15, overflow:"hidden" },
@@ -297,7 +302,7 @@ export default function StaffPortal() {
   )
 
   // Station picker screen
-  if (!station) return (
+  if (!station && screen !== "consumption") return (
     <div style={s.wrap}>
       <div style={{ ...s.header, background:"#1a1a2e" }}><Logo /><span style={{ fontSize:17, fontWeight:800 }}>PawonLoka Staff</span></div>
       <div style={s.body}>
@@ -316,20 +321,35 @@ export default function StaffPortal() {
             ))}
           </div>
         </div>
+        <div style={{ display:"flex", alignItems:"center", gap:10, margin:"18px 4px" }}>
+          <div style={{ flex:1, height:1, background:"#e0e0e0" }} />
+          <span style={{ fontSize:12, color:"#999", fontWeight:700 }}>OR</span>
+          <div style={{ flex:1, height:1, background:"#e0e0e0" }} />
+        </div>
+        <div style={{ ...s.card, padding:0, overflow:"hidden" }}>
+          <button onClick={()=>setScreen("consumption")}
+            style={{ ...s.btn, background:"#F59E0B", color:"#fff", marginBottom:0, textAlign:"left", display:"flex", alignItems:"center", gap:14, padding:"18px 16px", borderRadius:0 }}>
+            <span style={{ fontSize:28 }}>🍽️</span>
+            <div>
+              <div style={{ fontSize:16 }}>Staff Meal / Personal Use</div>
+              <div style={{ fontSize:12, fontWeight:400, opacity:0.85, marginTop:2 }}>Log food or drink you took for yourself</div>
+            </div>
+          </button>
+        </div>
       </div>
     </div>
   )
 
   if (done) return (
     <div style={s.wrap}>
-      <div style={s.header}><Logo /><span style={{ fontSize:17, fontWeight:800 }}>{station} Station</span></div>
+      <div style={s.header}><Logo /><span style={{ fontSize:17, fontWeight:800 }}>{station ? `${station} Station` : "PawonLoka Staff"}</span></div>
       <div style={{ ...s.body, textAlign:"center", paddingTop:60 }}>
         <div style={{ fontSize:56, marginBottom:16 }}>✅</div>
         <div style={{ fontSize:20, fontWeight:800, marginBottom:8 }}>Submitted!</div>
         <div style={{ fontSize:14, color:"#666", marginBottom:28 }}>Report sent to manager for review.</div>
         <div style={{ display:"flex", flexDirection:"column", gap:10, maxWidth:280, margin:"0 auto" }}>
-          <button onClick={reset} style={{ ...s.btn, background:stationColor, color:"#fff", marginBottom:0 }}>Submit Another</button>
-          <button onClick={()=>{ reset(); setStation(null) }} style={{ ...s.btn, background:"#f0f0f0", color:"#333", marginBottom:0 }}>Change Station</button>
+          <button onClick={()=>reset()} style={{ ...s.btn, background:stationColor, color:"#fff", marginBottom:0 }}>Submit Another</button>
+          <button onClick={()=>{ reset(true); setStation(null) }} style={{ ...s.btn, background:"#f0f0f0", color:"#333", marginBottom:0 }}>{station ? "Change Station" : "Back to Menu"}</button>
         </div>
       </div>
     </div>
@@ -376,7 +396,7 @@ export default function StaffPortal() {
         </div>
         <div style={s.body}>
           <div style={{ ...s.card, marginBottom:10 }}>
-            <StaffPicker station={station} value={staffName} onChange={setStaffName} staffList={stationStaff[station]||[]} />
+            <StaffPicker color={stationColor} value={staffName} onChange={setStaffName} staffList={stationStaff[station]||[]} />
           </div>
           <div style={{ ...s.card, padding:"10px 12px", marginBottom:10, display:"flex", alignItems:"center", gap:8 }}>
             <span style={{ fontSize:16 }}>🔍</span>
@@ -427,7 +447,7 @@ export default function StaffPortal() {
       </div>
       <div style={s.body}>
         <div style={s.card}>
-          <StaffPicker station={station} value={staffName} onChange={setStaffName} staffList={stationStaff[station]||[]} />
+          <StaffPicker color={stationColor} value={staffName} onChange={setStaffName} staffList={stationStaff[station]||[]} />
         </div>
         <div style={s.card}>
           <label style={s.label}>Ingredient / Sub-Recipe *</label>
@@ -461,7 +481,7 @@ export default function StaffPortal() {
       </div>
       <div style={s.body}>
         <div style={s.card}>
-          <StaffPicker station={station} value={staffName} onChange={setStaffName} staffList={stationStaff[station]||[]} />
+          <StaffPicker color={stationColor} value={staffName} onChange={setStaffName} staffList={station ? (stationStaff[station]||[]) : allStaff} />
         </div>
         <div style={s.card}>
           <label style={s.label}>Ingredient / Sub-Recipe *</label>
@@ -505,7 +525,7 @@ export default function StaffPortal() {
 
           {/* Staff */}
           <div style={s.card}>
-            <StaffPicker station={station} value={staffName} onChange={setStaffName} staffList={stationStaff[station]||[]} />
+            <StaffPicker color={stationColor} value={staffName} onChange={setStaffName} staffList={stationStaff[station]||[]} />
           </div>
 
           {/* Step 1 — Recipe selector */}
@@ -598,7 +618,7 @@ export default function StaffPortal() {
       </div>
       <div style={s.body}>
         <div style={s.card}>
-          <StaffPicker station={station} value={staffName} onChange={setStaffName} staffList={stationStaff[station]||[]} />
+          <StaffPicker color={stationColor} value={staffName} onChange={setStaffName} staffList={stationStaff[station]||[]} />
         </div>
         <div style={s.card}>
           <div style={{ marginBottom:14 }}>
