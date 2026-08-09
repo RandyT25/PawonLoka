@@ -133,7 +133,7 @@ export default function StaffPortal() {
   const [opnameSearch, setOpnameSearch] = useState("")
   const [staffName,    setStaffName]    = useState("")
   const [wasteForm,    setWasteForm]    = useState({ ingredient_id:"", qty:"", reason:"Expired", notes:"" })
-  const [consumptionForm, setConsumptionForm] = useState({ ingredient_id:"", qty:"", notes:"" })
+  const [consumptionForm, setConsumptionForm] = useState({ ingredient_id:"", qty:"", notes:"", date:new Date().toISOString().slice(0,10) })
   const [prodSubId,    setProdSubId]    = useState("")
   const [prodBatchQty, setProdBatchQty] = useState("")
   const [prodYield,    setProdYield]    = useState("")
@@ -240,7 +240,7 @@ export default function StaffPortal() {
   async function submitConsumption() {
     const ing = ingredients.find(i=>i.id===consumptionForm.ingredient_id)
     if (!ing||!consumptionForm.qty) { alert("Select ingredient and quantity"); return }
-    await submit("consumption", { ingredient_id:ing.id, ingredient_name:ing.name, qty:parseFloat(consumptionForm.qty), unit:ing.unit, notes:consumptionForm.notes, estimated_cost:(parseFloat(consumptionForm.qty)||0)*(ing.cost_per_unit||0) })
+    await submit("consumption", { ingredient_id:ing.id, ingredient_name:ing.name, qty:parseFloat(consumptionForm.qty), unit:ing.unit, notes:consumptionForm.notes, date:consumptionForm.date||new Date().toISOString().slice(0,10), estimated_cost:(parseFloat(consumptionForm.qty)||0)*(ing.cost_per_unit||0) })
   }
 
   async function submitProduction() {
@@ -277,7 +277,7 @@ export default function StaffPortal() {
   function reset(forceHome) {
     setDone(false); setScreen(forceHome || station ? "home" : "consumption"); setStaffName(""); setOpnameSearch("")
     setWasteForm({ ingredient_id:"", qty:"", reason:"Expired", notes:"" })
-    setConsumptionForm({ ingredient_id:"", qty:"", notes:"" })
+    setConsumptionForm({ ingredient_id:"", qty:"", notes:"", date:new Date().toISOString().slice(0,10) })
     setProdSubId(""); setProdBatchQty(""); setProdYield(""); setProdYieldUnit(""); setProdUsed([]); setProdNotes("")
     setReqDate(new Date().toISOString().slice(0,10)); setReqNotes(""); setReqItems([{ ingredient_id:"", qty:"", unit:"" }])
     if ((stationStaff[station]||[]).length === 1) setStaffName(stationStaff[station][0])
@@ -482,6 +482,10 @@ export default function StaffPortal() {
       <div style={s.body}>
         <div style={s.card}>
           <StaffPicker color={stationColor} value={staffName} onChange={setStaffName} staffList={station ? (stationStaff[station]||[]) : allStaff} />
+        </div>
+        <div style={s.card}>
+          <label style={s.label}>Date *</label>
+          <input type="date" value={consumptionForm.date} onChange={e=>setConsumptionForm(f=>({...f,date:e.target.value}))} style={s.input} max={new Date().toISOString().slice(0,10)} />
         </div>
         <div style={s.card}>
           <label style={s.label}>Ingredient / Sub-Recipe *</label>

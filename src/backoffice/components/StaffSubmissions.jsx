@@ -227,6 +227,10 @@ export default function StaffSubmissions() {
         const d = sub.data
         const ing = ingredients.find(i=>i.id===d.ingredient_id)
         if (ing) {
+          // Use the date staff picked when logging the meal (falls back to submission
+          // date for older submissions predating the picker) — not today's date, since
+          // approval can happen well after the meal was actually consumed.
+          const consumedDate = d.date || (sub.submitted_at||new Date().toISOString()).slice(0,10)
           // Fresh-fetch stock right before writing — approval can happen long after
           // submission, and sales/production in between shouldn't be silently clobbered.
           const { data:freshIng } = await supabase.from("ingredients").select("stock").eq("id",ing.id).maybeSingle()
@@ -234,7 +238,7 @@ export default function StaffSubmissions() {
           const { error:stockErr } = await supabase.from("ingredients").update({ stock:newStock }).eq("id",ing.id)
           if (stockErr) throw stockErr
           const { error:csmErr } = await supabase.from("staff_consumption").insert({
-            id:"CSM-"+Date.now(), date:new Date().toISOString().slice(0,10),
+            id:"CSM-"+Date.now(), date:consumedDate,
             ingredient_id:d.ingredient_id, ingredient_name:d.ingredient_name,
             qty:d.qty, unit:d.unit, cost:d.estimated_cost,
             consumed_by:sub.submitted_by, notes:d.notes||null,
@@ -246,7 +250,7 @@ export default function StaffSubmissions() {
             type:"Staff Meal", ingredient_id:d.ingredient_id, ingredient_name:d.ingredient_name,
             qty:-d.qty, unit:d.unit, ref:sub.id,
             note:"Staff meal by "+sub.submitted_by+(d.notes?": "+d.notes:""),
-            date:new Date().toISOString().slice(0,10),
+            date:consumedDate,
             time:new Date().toLocaleTimeString("id-ID",{hour:"2-digit",minute:"2-digit"})
           })
         }
@@ -665,7 +669,7 @@ export default function StaffSubmissions() {
               )}
               {viewModal.type==="consumption" && (
                 <div style={{ display:"grid", gap:14 }}>
-                  {[["Ingredient",viewModal.data.ingredient_name],["Quantity",viewModal.data.qty+" "+viewModal.data.unit],["Est. Cost",fmt(viewModal.data.estimated_cost)],["Notes",viewModal.data.notes||"—"]].map(([k,v])=>(
+                  {[["Date",viewModal.data.date||"—"],["Ingredient",viewModal.data.ingredient_name],["Quantity",viewModal.data.qty+" "+viewModal.data.unit],["Est. Cost",fmt(viewModal.data.estimated_cost)],["Notes",viewModal.data.notes||"—"]].map(([k,v])=>(
                     <div key={k}><div style={{ fontSize:11, color:"var(--ink4)", fontWeight:700, textTransform:"uppercase" }}>{k}</div><div style={{ fontWeight:600, marginTop:3 }}>{v}</div></div>
                   ))}
                 </div>
@@ -869,6 +873,8 @@ export default function StaffSubmissions() {
 
               {editModal.type==="consumption" && (
                 <div style={{ display:"grid", gap:12 }}>
+                  <div><label className="bo-label">Date</label>
+                    <input type="date" value={editData.date||""} onChange={e=>setEditData(d=>({...d,date:e.target.value}))} className="bo-input" /></div>
                   <div><label className="bo-label">Quantity</label>
                     <input type="number" value={editData.qty||""} onChange={e=>setEditData(d=>({...d,qty:e.target.value}))} className="bo-input" /></div>
                 </div>
