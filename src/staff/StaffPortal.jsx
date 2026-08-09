@@ -43,10 +43,10 @@ const STATION_DEPTS = {
 }
 
 const MENUS = {
-  Kitchen: ["opname","waste","consumption","production","requisition"],
-  Snack:   ["opname","waste","consumption","production","requisition"],
-  Bar:     ["opname","waste","consumption","production","requisition"],
-  Kasir:   ["consumption","requisition"],
+  Kitchen: ["opname","waste","production","requisition"],
+  Snack:   ["opname","waste","production","requisition"],
+  Bar:     ["opname","waste","production","requisition"],
+  Kasir:   ["requisition"],
 }
 
 const MENU_ITEMS = [
