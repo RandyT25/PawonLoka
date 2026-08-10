@@ -31,7 +31,7 @@ npm run build
 npx cap sync android
 JAVA_HOME=/Users/randy/.gradle/jdks/eclipse_adoptium-17-aarch64-os_x.2/jdk-17.0.19+10/Contents/Home \
   ./android/gradlew -p ./android assembleDebug
-cp ./android/app/build/outputs/apk/debug/app-debug.apk ~/Desktop/PawonLoka-debug.apk
+cp ./android/app/build/outputs/apk/debug/app-debug.apk ~/Desktop/PawonLoka-POS.apk
 ```
 
 ### APK-specific config (already set, do not change):

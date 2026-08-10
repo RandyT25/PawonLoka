@@ -8,6 +8,12 @@ const TYPE_COLORS = { opname:"var(--brand)", waste:"var(--red)", consumption:"#F
 const TYPE_ICONS  = { opname:"📋", waste:"🗑️", consumption:"🍽️", production:"🏭", requisition:"🛒" }
 const TYPE_LABELS = { opname:"Stock Count", waste:"Waste", consumption:"Staff Meal", production:"Production", requisition:"Request" }
 
+// The stock_movements.type value that approveOne() writes for each stock-affecting
+// submission type when it actually runs. Used to detect submissions marked "approved"
+// whose data never went through approveOne() (e.g. a manual DB edit) — requisition is
+// intentionally excluded since it never touches stock.
+const EXPECTED_MOVEMENT_TYPE = { opname:"Adjustment", waste:"Waste", consumption:"Staff Meal", production:"Production" }
+
 function IngSearchEdit({ ingredients, onSelect }) {
   const [q, setQ] = useState("")
   const [open, setOpen] = useState(false)
@@ -50,6 +56,10 @@ export default function StaffSubmissions() {
   const [newCount,    setNewCount]    = useState(0)
   const [selected,    setSelected]    = useState(new Set())
   const [confirmState, setConfirmState] = useState(null) // {message, resolve}
+  const [orphanApprovedIds, setOrphanApprovedIds] = useState(new Set()) // approved sub IDs missing their expected stock_movements
+  const [dismissedOrphanIds, setDismissedOrphanIds] = useState(() => {
+    try { return new Set(JSON.parse(localStorage.getItem("ss_dismissed_orphans")||"[]")) } catch { return new Set() }
+  })
   const audioRef = useRef(null)
   const channelRef = useRef(null)
 
@@ -99,6 +109,51 @@ export default function StaffSubmissions() {
     setSubmissions(s||[]); setIngredients(i||[]); setSubRecipes(sr||[]); setSubRecipeIngs(sri||[]); setSuppliers(sup||[])
     setLoading(false)
     setNewCount(0)
+    checkOrphanedApprovals(s||[]) // non-blocking; fills in the "not applied" badges once ready
+  }
+
+  // Detects approved submissions whose data never actually reached ingredients.stock —
+  // i.e. status:"approved" with no corresponding stock_movements row of the expected
+  // type. Runs as a single batched (chunked) query, not one query per submission, so it
+  // stays cheap regardless of how many submissions are loaded. Does NOT reconcile exact
+  // quantities (e.g. per-line diff matching) — presence of at least one movement of the
+  // right type is enough to catch the true-orphan case (the dangerous one); tighter
+  // reconciliation is deliberately left out as lower-value/higher-complexity.
+  async function checkOrphanedApprovals(subs) {
+    const candidates = subs.filter(s => s.status === "approved" && EXPECTED_MOVEMENT_TYPE[s.type])
+    if (!candidates.length) { setOrphanApprovedIds(new Set()); return }
+
+    const ids = candidates.map(s => s.id)
+    const typesByRef = new Map() // submission id -> Set of stock_movements.type seen for it
+    const CHUNK = 200 // keep .in() query strings well under URL/param limits
+    for (let i = 0; i < ids.length; i += CHUNK) {
+      const chunk = ids.slice(i, i + CHUNK)
+      const { data, error } = await supabase.from("stock_movements").select("ref,type").in("ref", chunk)
+      if (error) { console.error("Orphan-approval check failed, skipping this batch:", error); continue }
+      for (const row of data || []) {
+        if (!typesByRef.has(row.ref)) typesByRef.set(row.ref, new Set())
+        typesByRef.get(row.ref).add(row.type)
+      }
+    }
+
+    const orphans = new Set()
+    for (const sub of candidates) {
+      const seen = typesByRef.get(sub.id)
+      if (!seen || !seen.has(EXPECTED_MOVEMENT_TYPE[sub.type])) orphans.add(sub.id)
+    }
+    setOrphanApprovedIds(orphans)
+  }
+
+  function isOrphanApproved(sub) {
+    return sub?.status === "approved" && orphanApprovedIds.has(sub.id)
+  }
+
+  function dismissOrphan(id) {
+    setDismissedOrphanIds(prev => {
+      const next = new Set(prev); next.add(id)
+      localStorage.setItem("ss_dismissed_orphans", JSON.stringify([...next]))
+      return next
+    })
   }
 
   const byStatus = (st) => submissions.filter(s => s.status === st)
@@ -523,6 +578,18 @@ export default function StaffSubmissions() {
         </div>
       </div>
 
+      {/* Orphaned-approval warning — approved submissions with no matching stock_movements */}
+      {[...orphanApprovedIds].some(id => !dismissedOrphanIds.has(id)) && (
+        <div style={{ padding:"12px 16px", background:"var(--red-lt)", border:"1.5px solid var(--red)", borderRadius:"var(--r)", marginBottom:16 }}>
+          <div style={{ fontWeight:700, color:"var(--red)", fontSize:13 }}>
+            ⚠ {[...orphanApprovedIds].filter(id => !dismissedOrphanIds.has(id)).length} approved submission(s) may never have been applied to stock
+          </div>
+          <div style={{ fontSize:12, color:"var(--ink4)", marginTop:2 }}>
+            These are marked "approved" but have no matching stock_movements record of the expected type — their counted/produced quantities likely never reached live inventory. Filter to "Approved" and look for the ⚠ badge to review each one.
+          </div>
+        </div>
+      )}
+
       {/* Stats */}
       <div className="bo-metrics" style={{ gridTemplateColumns:"repeat(3,1fr)", marginBottom:16 }}>
         <div className="bo-met amber">
@@ -583,14 +650,24 @@ export default function StaffSubmissions() {
                   : s.type==="requisition" ? (s.data.items||[]).length+" items requested — "+fmt(reqTotal)+" total"
                   : (s.data.batch_qty ? s.data.batch_qty+"× resep · " : "")+(s.data.actual_yield??s.data.batch_qty)+" "+(s.data.yield_unit||s.data.unit||"")+" "+s.data.item_name
                 return (
-                  <tr key={s.id} style={{ background: s.status==="pending"?"#fffbeb":s.status==="approved"?"var(--green-lt)":s.status==="rejected"?"var(--red-lt)":"" }}>
+                  <tr key={s.id} style={{ background: (isOrphanApproved(s) && !dismissedOrphanIds.has(s.id)) ? "var(--red-lt)"
+                    : s.status==="pending"?"#fffbeb":s.status==="approved"?"var(--green-lt)":s.status==="rejected"?"var(--red-lt)":"" }}>
                     <td><input type="checkbox" checked={selected.has(s.id)} onChange={()=>toggleSelect(s.id)} /></td>
                     <td><span style={{ fontSize:11, fontWeight:700, padding:"2px 8px", borderRadius:10, background:c+"22", color:c }}>{TYPE_ICONS[s.type]} {TYPE_LABELS[s.type]||s.type}</span></td>
                     <td style={{ fontWeight:600 }}>{s.submitted_by||"—"}</td>
                     <td style={{ fontSize:12, color:"var(--ink4)" }}>{s.data?.station||"—"}</td>
                     <td style={{ fontSize:12 }}>{new Date(s.submitted_at).toLocaleString("id-ID")}</td>
                     <td style={{ fontSize:12, color:"var(--ink4)" }}>{summary}</td>
-                    <td><span className={"bo-badge "+(s.status==="pending"?"bo-badge-amber":s.status==="approved"?"bo-badge-green":"bo-badge-red")}>{s.status}</span></td>
+                    <td>
+                      <div style={{ display:"flex", flexDirection:"column", gap:4, alignItems:"flex-start" }}>
+                        <span className={"bo-badge "+(s.status==="pending"?"bo-badge-amber":s.status==="approved"?"bo-badge-green":"bo-badge-red")}>{s.status}</span>
+                        {isOrphanApproved(s) && (
+                          dismissedOrphanIds.has(s.id)
+                            ? <span className="bo-badge" style={{ background:"var(--surface)", color:"var(--ink5)" }} title="Flagged as approved-but-not-applied; acknowledged.">✓ Ack'd</span>
+                            : <span className="bo-badge" style={{ background:"var(--red-lt)", color:"var(--red)" }} title={"No '"+EXPECTED_MOVEMENT_TYPE[s.type]+"' stock_movements row found for this submission — its data likely never reached live stock."}>⚠ Not applied</span>
+                        )}
+                      </div>
+                    </td>
                     <td>
                       <div style={{ display:"flex", gap:4 }}>
                         <button onClick={()=>openViewModal(s)} className="bo-btn bo-btn-ghost bo-btn-sm">View</button>
@@ -622,6 +699,19 @@ export default function StaffSubmissions() {
               </div>
               <button className="bo-modal-close" onClick={()=>setViewModal(null)}>x</button>
             </div>
+            {isOrphanApproved(viewModal) && (
+              <div style={{ margin:"0 20px 12px", padding:"10px 14px", background:"var(--red-lt)", border:"1.5px solid var(--red)", borderRadius:"var(--r)" }}>
+                <div style={{ fontWeight:700, color:"var(--red)", fontSize:13 }}>⚠ Approved but not applied to stock</div>
+                <div style={{ fontSize:12, color:"var(--ink4)", marginTop:4 }}>
+                  No "{EXPECTED_MOVEMENT_TYPE[viewModal.type]}" stock_movements record references this submission. It was likely marked approved
+                  without going through the normal apply-to-stock flow (e.g. a manual database edit). Re-applying automatically is not safe this
+                  long after the fact — if correction is needed, do a fresh count/entry instead.
+                </div>
+                {!dismissedOrphanIds.has(viewModal.id) && (
+                  <button onClick={()=>dismissOrphan(viewModal.id)} className="bo-btn bo-btn-sm bo-btn-ghost" style={{ marginTop:8 }}>Acknowledge</button>
+                )}
+              </div>
+            )}
             <div className="bo-modal-body" style={{ overflowY:"auto" }}>
               {viewModal.type==="opname" && (() => {
                 const totalValue = (viewModal.data.items||[]).reduce((a,item)=>a+(item.actual_qty*(ingredients.find(x=>x.id===item.ingredient_id)?.cost_per_unit||0)),0)
