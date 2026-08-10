@@ -81,10 +81,11 @@ async function cascadeRecalc(updatedIngIds) {
       if (!ing) continue
       totalCost += toBaseUnit(ing, parseFloat(line.qty)||0, line.unit) * (ing.cost_per_unit||0)
     }
-    const { data: product } = await supabase.from("products").select("price").eq("id", productId).single()
-    const price = product?.price || 0
-    const margin = price > 0 ? Math.round(((price - totalCost) / price) * 100) : 0
-    await supabase.from("products").update({ cogs:Math.round(totalCost), margin }).eq("id", productId)
+    // products' PK is "sku", not "id" — and it has no "margin" column (Products.jsx computes
+    // margin on the fly from cogs/price). Both were wrong here, so this cascade silently
+    // no-op'd (PostgREST rejects unknown columns) and COGS never actually got recalculated
+    // after a PO payment.
+    await supabase.from("products").update({ cogs:Math.round(totalCost) }).eq("sku", productId)
   }))
 
   if (updatedSubIngIds.length) await cascadeRecalc(updatedSubIngIds)
@@ -478,7 +479,22 @@ export default function InvPO() {
       const qty = parseFloat(item.qty) || 0
       const unitCost = qty > 0 ? (parseFloat(item.total_cost)||0) / qty : 0
       const refUnitCost = ing.cost_per_unit * toBaseUnit(ing, 1, item.unit)
-      if (refUnitCost > 0 && (unitCost > refUnitCost * 5 || unitCost < refUnitCost * 0.2)) {
+      if (refUnitCost <= 0) continue
+      const ratio = unitCost / refUnitCost
+      // Extreme deviations are almost always the WRONG UNIT selected (e.g. the "kg" the unit
+      // dropdown defaults to, when the purchase was really gr/pcs) rather than a real price
+      // swing — this is exactly how Timun/Wortel/Bumbu Racik's cost_per_unit got poisoned by
+      // 500kg/20kg entries that were actually 500gr/20pcs. Block outright instead of a
+      // dismissible confirm() that's easy to click through without noticing the mistake.
+      if (ratio > 20 || ratio < 0.05) {
+        alert(
+          `${ing.name}: harga ${fmt(unitCost)}/${item.unit} sangat jauh berbeda dari harga ` +
+          `biasanya (~${fmt(refUnitCost)}/${item.unit}). Cek lagi unit yang dipilih (${item.unit}) — ` +
+          `kemungkinan besar salah unit (misal "kg" padahal maksudnya "gr" atau "pcs").`
+        )
+        return
+      }
+      if (ratio > 5 || ratio < 0.2) {
         const ok = confirm(
           `${ing.name}: harga ${fmt(unitCost)}/${item.unit} jauh berbeda dari harga biasanya ` +
           `(~${fmt(refUnitCost)}/${item.unit}). Lanjutkan?`
