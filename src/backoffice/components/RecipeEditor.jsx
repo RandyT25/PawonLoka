@@ -24,7 +24,11 @@ function IngSearch({ value, onChange, ingredients, subRecipes, showSubs = true }
 
   const all = [
     ...ingredients.filter(i => i.category !== "Semi-finished" && isFoodCategory(i.category)).map(i => ({ ...i, _g:"Raw" })),
-    ...(showSubs ? subRecipes.map(s => ({ ...s, _g:"Sub" })) : []),
+    // Use ingredient_id (not the sub_recipes row's own id) as the lookup key — that's what
+    // recipe lines actually store for a sub-recipe-as-ingredient, per handleIngChange's
+    // resolution below. Using s.id here made this component unable to resolve/display any
+    // existing line referencing a sub-recipe nested inside another sub-recipe.
+    ...(showSubs ? subRecipes.map(s => ({ ...s, id: s.ingredient_id, _g:"Sub" })) : []),
   ]
   const filtered = q ? all.filter(x => x.name.toLowerCase().includes(q.toLowerCase())) : all
   const sel = all.find(x => x.id === value)
