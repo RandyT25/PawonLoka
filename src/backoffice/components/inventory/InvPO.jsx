@@ -228,6 +228,14 @@ export default function InvPO() {
     setLoading(false)
   }
 
+  // Ingredient costs can be corrected elsewhere (e.g. the Ingredients tab) while a PO
+  // form is already open — refetch just the ingredient list so the price-outlier check
+  // in submitPO() compares against current data, without resetting the form itself.
+  async function reloadIngredients() {
+    const { data } = await supabase.from("ingredients").select("*")
+    setIngredients(data || [])
+  }
+
   const unpaid  = pos.filter(p => p.status==="Unpaid")
   const paid    = pos.filter(p => p.status==="Paid")
   const overdue = pos.filter(p => p.status==="Unpaid" && p.due_date && new Date(p.due_date)<new Date())
@@ -849,14 +857,23 @@ export default function InvPO() {
         </div>
       )}
 
-      {newPO && <POFormModal title="Create Purchase Order" onSubmit={()=>submitPO(false)} onClose={()=>{setNewPO(false);setPOItems([{ingredient_id:"",qty:"",unit:"gr",total_cost:"",unit_cost:""}])}} suppliers={suppliers} ingredients={ingredients} poForm={poForm} setPOForm={setPOForm} poItems={poItems} addPOItem={addPOItem} removePOItem={removePOItem} updatePOItem={updatePOItem} getUnits={getUnits} grandTotal={grandTotal} saving={saving} />}
-      {editModal && <POFormModal title="Save Changes" onSubmit={()=>submitPO(true)} onClose={()=>{setEditModal(null);setPOItems([{ingredient_id:"",qty:"",unit:"gr",total_cost:"",unit_cost:""}])}} suppliers={suppliers} ingredients={ingredients} poForm={poForm} setPOForm={setPOForm} poItems={poItems} addPOItem={addPOItem} removePOItem={removePOItem} updatePOItem={updatePOItem} getUnits={getUnits} grandTotal={grandTotal} saving={saving} />}
+      {newPO && <POFormModal title="Create Purchase Order" onSubmit={()=>submitPO(false)} onClose={()=>{setNewPO(false);setPOItems([{ingredient_id:"",qty:"",unit:"gr",total_cost:"",unit_cost:""}])}} suppliers={suppliers} ingredients={ingredients} onRefreshIngredients={reloadIngredients} poForm={poForm} setPOForm={setPOForm} poItems={poItems} addPOItem={addPOItem} removePOItem={removePOItem} updatePOItem={updatePOItem} getUnits={getUnits} grandTotal={grandTotal} saving={saving} />}
+      {editModal && <POFormModal title="Save Changes" onSubmit={()=>submitPO(true)} onClose={()=>{setEditModal(null);setPOItems([{ingredient_id:"",qty:"",unit:"gr",total_cost:"",unit_cost:""}])}} suppliers={suppliers} ingredients={ingredients} onRefreshIngredients={reloadIngredients} poForm={poForm} setPOForm={setPOForm} poItems={poItems} addPOItem={addPOItem} removePOItem={removePOItem} updatePOItem={updatePOItem} getUnits={getUnits} grandTotal={grandTotal} saving={saving} />}
     </div>
   )
 }
 
 function fmt2(n) { return "Rp " + Number(n||0).toLocaleString("id-ID") }
-function POFormModal({ title, onSubmit, onClose, suppliers, ingredients, poForm, setPOForm, poItems, addPOItem, removePOItem, updatePOItem, getUnits, grandTotal, saving }) {
+function POFormModal({ title, onSubmit, onClose, suppliers, ingredients, onRefreshIngredients, poForm, setPOForm, poItems, addPOItem, removePOItem, updatePOItem, getUnits, grandTotal, saving }) {
+  const [refreshingIng, setRefreshingIng] = useState(false)
+  const [ingRefreshed,  setIngRefreshed]  = useState(false)
+  async function handleRefreshIngredients() {
+    setRefreshingIng(true)
+    await onRefreshIngredients()
+    setRefreshingIng(false)
+    setIngRefreshed(true)
+    setTimeout(() => setIngRefreshed(false), 2000)
+  }
   return (
     <div className="bo-overlay" onMouseDown={e=>e.target===e.currentTarget&&onClose()}>
       <div className="bo-modal" style={{ maxWidth:700, maxHeight:"94vh" }}>
@@ -884,7 +901,13 @@ function POFormModal({ title, onSubmit, onClose, suppliers, ingredients, poForm,
           <div style={{ marginBottom:14 }}>
             <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:10 }}>
               <label className="bo-label" style={{ marginBottom:0 }}>Items *</label>
-              <button onClick={addPOItem} className="bo-btn bo-btn-ghost bo-btn-sm">+ Add Item</button>
+              <div style={{ display:"flex", gap:8, alignItems:"center" }}>
+                {ingRefreshed && <span style={{ fontSize:11, color:"var(--green,#16A34A)" }}>✓ Harga diperbarui</span>}
+                <button onClick={handleRefreshIngredients} disabled={refreshingIng} className="bo-btn bo-btn-ghost bo-btn-sm" title="Muat ulang harga bahan tanpa menutup form ini">
+                  {refreshingIng ? "..." : "🔄 Refresh Harga Bahan"}
+                </button>
+                <button onClick={addPOItem} className="bo-btn bo-btn-ghost bo-btn-sm">+ Add Item</button>
+              </div>
             </div>
             <div style={{ display:"grid", gridTemplateColumns:"2fr 80px 100px 130px 130px 36px", gap:6, marginBottom:6 }} className="po-items-header">
               {["INGREDIENT","QTY","UNIT","TOTAL HARGA","HARGA/UNIT",""].map((h,i)=><div key={i} style={{ fontSize:10, fontWeight:700, color:"var(--ink4)" }}>{h}</div>)}
