@@ -52,6 +52,7 @@ export default function StaffSubmissions() {
   const [editModal,   setEditModal]   = useState(null)
   const [editData,    setEditData]    = useState(null)
   const [loading,     setLoading]     = useState(true)
+  const [loadError,   setLoadError]   = useState(null)
   const [processing,  setProcessing]  = useState(false)
   const [newCount,    setNewCount]    = useState(0)
   const [selected,    setSelected]    = useState(new Set())
@@ -99,17 +100,30 @@ export default function StaffSubmissions() {
 
   async function load() {
     setLoading(true)
-    const [{ data:s }, { data:i }, { data:sr }, { data:sri }, { data:sup }] = await Promise.all([
-      supabase.from("staff_submissions").select("*").order("submitted_at", { ascending:false }),
-      supabase.from("ingredients").select("*"),
-      supabase.from("sub_recipes").select("id,name,ingredient_id,yield_qty,yield_unit"),
-      supabase.from("sub_recipe_ingredients").select("*"),
-      supabase.from("suppliers").select("id,name,phone"),
-    ])
-    setSubmissions(s||[]); setIngredients(i||[]); setSubRecipes(sr||[]); setSubRecipeIngs(sri||[]); setSuppliers(sup||[])
+    setLoadError(null)
+    try {
+      const [subRes, ingRes, srRes, sriRes, supRes] = await Promise.all([
+        supabase.from("staff_submissions").select("*").order("submitted_at", { ascending:false }),
+        supabase.from("ingredients").select("*"),
+        supabase.from("sub_recipes").select("id,name,ingredient_id,yield_qty,yield_unit"),
+        supabase.from("sub_recipe_ingredients").select("*"),
+        supabase.from("suppliers").select("id,name,phone"),
+      ])
+      // Each query resolves with {data,error} rather than throwing — a rejected/RLS'd query
+      // was previously silently treated as "no data" instead of surfacing anything.
+      const failed = [subRes, ingRes, srRes, sriRes, supRes].find(r => r.error)
+      if (failed) throw failed.error
+      const { data:s } = subRes, { data:i } = ingRes, { data:sr } = srRes, { data:sri } = sriRes, { data:sup } = supRes
+      setSubmissions(s||[]); setIngredients(i||[]); setSubRecipes(sr||[]); setSubRecipeIngs(sri||[]); setSuppliers(sup||[])
+      setNewCount(0)
+      checkOrphanedApprovals(s||[]) // non-blocking; fills in the "not applied" badges once ready
+    } catch (e) {
+      // A rejected Promise.all (network/fetch failure) used to skip every line below it —
+      // including setLoading(false) — leaving the page stuck on "Loading..." forever with
+      // no feedback. Always resolve loading state and show what went wrong instead.
+      setLoadError(e.message || "Failed to load staff reports")
+    }
     setLoading(false)
-    setNewCount(0)
-    checkOrphanedApprovals(s||[]) // non-blocking; fills in the "not applied" badges once ready
   }
 
   // Detects approved submissions whose data never actually reached ingredients.stock —
@@ -151,6 +165,15 @@ export default function StaffSubmissions() {
   function dismissOrphan(id) {
     setDismissedOrphanIds(prev => {
       const next = new Set(prev); next.add(id)
+      localStorage.setItem("ss_dismissed_orphans", JSON.stringify([...next]))
+      return next
+    })
+  }
+
+  function dismissAllOrphans() {
+    setDismissedOrphanIds(prev => {
+      const next = new Set(prev)
+      for (const id of orphanApprovedIds) next.add(id)
       localStorage.setItem("ss_dismissed_orphans", JSON.stringify([...next]))
       return next
     })
@@ -580,13 +603,16 @@ export default function StaffSubmissions() {
 
       {/* Orphaned-approval warning — approved submissions with no matching stock_movements */}
       {[...orphanApprovedIds].some(id => !dismissedOrphanIds.has(id)) && (
-        <div style={{ padding:"12px 16px", background:"var(--red-lt)", border:"1.5px solid var(--red)", borderRadius:"var(--r)", marginBottom:16 }}>
-          <div style={{ fontWeight:700, color:"var(--red)", fontSize:13 }}>
-            ⚠ {[...orphanApprovedIds].filter(id => !dismissedOrphanIds.has(id)).length} approved submission(s) may never have been applied to stock
+        <div style={{ padding:"12px 16px", background:"var(--red-lt)", border:"1.5px solid var(--red)", borderRadius:"var(--r)", marginBottom:16, display:"flex", justifyContent:"space-between", alignItems:"flex-start", gap:12 }}>
+          <div>
+            <div style={{ fontWeight:700, color:"var(--red)", fontSize:13 }}>
+              ⚠ {[...orphanApprovedIds].filter(id => !dismissedOrphanIds.has(id)).length} approved submission(s) may never have been applied to stock
+            </div>
+            <div style={{ fontSize:12, color:"var(--ink4)", marginTop:2 }}>
+              These are marked "approved" but have no matching stock_movements record of the expected type — their counted/produced quantities likely never reached live inventory. Filter to "Approved" and look for the ⚠ badge to review each one.
+            </div>
           </div>
-          <div style={{ fontSize:12, color:"var(--ink4)", marginTop:2 }}>
-            These are marked "approved" but have no matching stock_movements record of the expected type — their counted/produced quantities likely never reached live inventory. Filter to "Approved" and look for the ⚠ badge to review each one.
-          </div>
+          <button onClick={dismissAllOrphans} className="bo-btn bo-btn-sm bo-btn-ghost" style={{ flexShrink:0, whiteSpace:"nowrap" }}>Acknowledge All</button>
         </div>
       )}
 
@@ -634,7 +660,13 @@ export default function StaffSubmissions() {
 
       {/* Table */}
       <div className="bo-card" style={{ padding:0, overflowX:"auto" }}>
-        {loading ? <div style={{ padding:40, textAlign:"center", color:"var(--ink5)" }}>Loading...</div> : (
+        {loading ? <div style={{ padding:40, textAlign:"center", color:"var(--ink5)" }}>Loading...</div> : loadError ? (
+          <div style={{ padding:40, textAlign:"center" }}>
+            <div style={{ color:"var(--red)", fontWeight:700, marginBottom:6 }}>Failed to load staff reports</div>
+            <div style={{ color:"var(--ink5)", fontSize:13, marginBottom:14 }}>{loadError}</div>
+            <button onClick={load} className="bo-btn bo-btn-primary bo-btn-sm">Retry</button>
+          </div>
+        ) : (
           <table className="bo-table">
             <thead><tr>
               <th><input type="checkbox" checked={filtered.length>0 && selected.size===filtered.length} onChange={()=>setSelected(selected.size===filtered.length ? new Set() : new Set(filtered.map(s=>s.id)))} /></th>

@@ -213,13 +213,15 @@ export default function StaffPortal() {
   async function submit(type, data) {
     if (!staffName) { alert("Please select who is submitting"); return }
     setSaving(true)
-    await supabase.from("staff_submissions").insert({
+    const { error } = await supabase.from("staff_submissions").insert({
       id:"SS-"+Date.now(), type, status:"pending",
       submitted_by: staffName,
       submitted_at: new Date().toISOString(),
       data: { ...data, station, submitted_by: staffName }
     })
-    setSaving(false); setDone(true)
+    setSaving(false)
+    if (error) { alert("Failed to submit report: "+error.message+"\n\nPlease try again or tell your manager."); return }
+    setDone(true)
   }
 
   async function submitOpname() {
