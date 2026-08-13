@@ -290,7 +290,15 @@ export default function POS() {
   // occupancy cache honest regardless of which device changed the order.
   useEffect(() => {
     const ch = supabase.channel('pos_orders_sync')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'orders' }, () => invalidateFloorPlanCache())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'orders' }, payload => {
+        invalidateFloorPlanCache()
+        // Also drop this specific bill's cached snapshot — recallFromOrder's cache-first
+        // read (offline_open_bill_<id>) otherwise keeps trusting a stale local copy even
+        // after another device changes the same order, and the next save from here would
+        // silently overwrite the newer server state with old data.
+        const changedId = payload.new?.id || payload.old?.id
+        if (changedId) offlineStore.setCache('offline_open_bill_' + changedId, null)
+      })
       .subscribe()
     return () => { supabase.removeChannel(ch) }
   }, [])
@@ -664,7 +672,8 @@ export default function POS() {
     if (openBillId) {
       // Rebuild item list from cart — cart is source of truth for the full order state
       const allItems = cart.map(i => ({ sku:i.sku||'', name:i.name, qty:i.qty, price:i.price, modifiers:i.modifiers||{}, note:i.note||'', cat:i.cat||'', _sent:true, _station: getStation(i.cat), isBundle:i.isBundle||false, bundleItems:i.bundleItems||null }))
-      await dbWrite('orders', 'update', { items: allItems, subtotal, tax, discount: discAmt, total }, { id: openBillId })
+      const ok = await dbWrite('orders', 'update', { items: allItems, subtotal, tax, discount: discAmt, total }, { id: openBillId })
+      if (!ok) { alert('Gagal menyimpan tambahan pesanan — cek koneksi dan coba lagi.'); return }
       updateOrderCache({ id: openBillId, items: allItems, subtotal, tax, total, status: 'Open' })
     } else {
       // Create new open bill
@@ -917,18 +926,22 @@ export default function POS() {
     if (item._sent) printCancelTicket([{ ...item, qty: item._printedQty || item.qty }])
     if (openBillId) {
       if (newCart.length === 0) {
-        // Last item removed — delete the empty order and reset POS
-        await dbWrite('orders', 'delete', null, { id: openBillId })
+        // Last item removed — delete the empty order and reset POS. If the delete itself
+        // fails, don't reset openBillId/table state — the order still exists server-side,
+        // so resetting here would make the table look free while it's actually still open.
+        const deleted = await dbWrite('orders', 'delete', null, { id: openBillId })
+        if (!deleted) { alert('Gagal menghapus order — cek koneksi dan coba lagi. Meja belum dibebaskan.'); return }
         if (tableNo) await dbWrite('tables', 'update', { status:'Available', open_bill_id:null }, tableArea ? { name: tableNo, area: tableArea } : { name: tableNo })
         invalidateFloorPlanCache()
         setOpenBillId(null); setTableNo(''); setTableArea(''); setPax(0); setCustomer(null); setDiscount(0)
       } else {
         const mapped = newCart.map(i => ({ sku:i.sku||'', name:i.name, qty:i.qty, price:i.price, modifiers:i.modifiers||{}, note:i.note||'', cat:i.cat||'', _sent:i._sent||false, _station:i._station||'', isBundle:i.isBundle||false, bundleItems:i.bundleItems||null, itemDisc:i.itemDisc||0, itemDiscLabel:i.itemDiscLabel||'' }))
         const totals = computeOrderTotals({ items: mapped, discountPct: discount, taxRate: TAX_RATE_LIVE })
-        await dbWrite('orders', 'update', {
+        const ok = await dbWrite('orders', 'update', {
           ...totals,
           notes: (item.notes||'') + ' | REMOVE: ' + item.name + ' - ' + reason
         }, { id: openBillId })
+        if (!ok) alert('Item dihapus di layar ini, tapi gagal tersimpan ke server — cek koneksi. Muat ulang untuk memastikan.')
       }
     }
   }
@@ -948,18 +961,22 @@ export default function POS() {
     if (item._sent) printCancelTicket([{ ...item, qty: delta }])
     if (openBillId) {
       if (newCart.length === 0) {
-        // Cart is now empty — delete the order and reset POS
-        await dbWrite('orders', 'delete', null, { id: openBillId })
+        // Cart is now empty — delete the order and reset POS. If the delete itself fails,
+        // don't reset openBillId/table state — the order still exists server-side, so
+        // resetting here would make the table look free while it's actually still open.
+        const deleted = await dbWrite('orders', 'delete', null, { id: openBillId })
+        if (!deleted) { alert('Gagal menghapus order — cek koneksi dan coba lagi. Meja belum dibebaskan.'); return }
         if (tableNo) await dbWrite('tables', 'update', { status:'Available', open_bill_id:null }, tableArea ? { name: tableNo, area: tableArea } : { name: tableNo })
         invalidateFloorPlanCache()
         setOpenBillId(null); setTableNo(''); setTableArea(''); setPax(0); setCustomer(null); setDiscount(0)
       } else {
         const mapped = newCart.map(i => ({ sku:i.sku||'', name:i.name, qty:i.qty, price:i.price, modifiers:i.modifiers||{}, note:i.note||'', cat:i.cat||'', _sent:i._sent||false, _station:i._station||'', isBundle:i.isBundle||false, bundleItems:i.bundleItems||null, itemDisc:i.itemDisc||0, itemDiscLabel:i.itemDiscLabel||'' }))
         const totals = computeOrderTotals({ items: mapped, discountPct: discount, taxRate: TAX_RATE_LIVE })
-        await dbWrite('orders', 'update', {
+        const ok = await dbWrite('orders', 'update', {
           ...totals,
           notes: (item.notes||'') + ' | REDUCE: ' + item.name + ' -' + delta + ' - ' + reason
         }, { id: openBillId })
+        if (!ok) alert('Qty dikurangi di layar ini, tapi gagal tersimpan ke server — cek koneksi. Muat ulang untuk memastikan.')
       }
     }
   }

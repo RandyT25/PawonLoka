@@ -36,6 +36,12 @@ export default function MobileMenuSlider({ show, onClose, staff, onClockIn, onCa
             style={{ display:'flex', alignItems:'center', gap:10, width:'100%', padding:'12px 20px', background:'none', border:'none', color:'#FCA5A5', fontSize:14, fontWeight:600, cursor:'pointer' }}>
             🚪 Logout
           </button>
+          {/* Which build is actually running on this device — the packaged Android app
+              only picks up fixes when manually reinstalled, so this is the only way to
+              tell from the device itself whether it's up to date. */}
+          <div style={{ textAlign:'center', fontSize:10, color:'rgba(255,255,255,0.25)', padding:'8px 0 4px' }}>
+            Build: {typeof __BUILD_TIME__!=='undefined' ? new Date(__BUILD_TIME__).toLocaleString('id-ID') : '—'}
+          </div>
         </div>
       </div>
     </div>

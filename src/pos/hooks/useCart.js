@@ -7,7 +7,11 @@ export default function useCart() {
       const key = product.sku + JSON.stringify(modifiers)
       const existing = prev.find(i => i._key === key)
       if (existing) return prev.map(i => i._key === key ? { ...i, qty: i.qty + 1 } : i)
-      return [...prev, { ...product, qty: 1, modifiers, _key: key, note: '', itemDisc: 0 }]
+      // note: product.note||'' — NOT a hardcoded '', which was silently discarding
+      // whatever note the staff typed in ModifierModal's "Note / Special Request"
+      // field the moment an item was first added (only editing the note again
+      // afterward via Cart's inline Note button actually persisted).
+      return [...prev, { ...product, qty: 1, modifiers, _key: key, note: product.note || '', itemDisc: 0 }]
     })
   }, [])
 
