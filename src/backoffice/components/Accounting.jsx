@@ -229,8 +229,17 @@ export default function Accounting() {
   // shouldn't keep hitting every future period's P&L.
   const salaryTotal = staff.filter(s=>s.active!==false).reduce((a,s)=>a+(s.salary||0),0)
 
-  // Outstanding kas bon
-  const kbOutstanding = kasBonList.filter(k=>k.status==="outstanding").reduce((a,k)=>a+(k.amount||0),0)
+  // The kas_bon fetch in load() is deliberately NOT date-filtered — payroll's
+  // outstanding-balance deduction below (kasBonList.filter(...status==="outstanding"))
+  // needs to see advances from prior periods too, not just the selected month. But the
+  // Kas Bon TAB's own display should still scope to the selected period like every other
+  // tab on this page, so it doesn't show every kas bon ever taken regardless of the
+  // month dropdown.
+  const kasBonInPeriod = useMemo(() => kasBonList.filter(k => k.date && k.date.startsWith(period)), [kasBonList, period])
+
+  // Outstanding kas bon (for this period's display only — payroll math above uses the
+  // full unfiltered kasBonList directly)
+  const kbOutstanding = kasBonInPeriod.filter(k=>k.status==="outstanding").reduce((a,k)=>a+(k.amount||0),0)
 
   // Group kas bon entries by staff so a staff with multiple advances shows one
   // summary row (total + count) instead of scattered individual rows — expandable
@@ -238,7 +247,7 @@ export default function Accounting() {
   // don't need a group at all; they render as a plain row same as before.
   const kbGroups = useMemo(() => {
     const byStaff = {}
-    kasBonList.forEach(k => {
+    kasBonInPeriod.forEach(k => {
       if (!byStaff[k.staff_name]) byStaff[k.staff_name] = []
       byStaff[k.staff_name].push(k)
     })
@@ -249,7 +258,7 @@ export default function Accounting() {
         total: entries.reduce((a,k)=>a+(k.amount||0),0),
       }))
       .sort((a,b)=>b.total-a.total)
-  }, [kasBonList])
+  }, [kasBonInPeriod])
 
   // Manual expenses by category
   const manualExpenses = expenses.filter(e=>e.auto_source!=="po"&&e.auto_source!=="salary")
@@ -890,11 +899,11 @@ export default function Accounting() {
               </div>
               <div style={{ background:"#fff",border:"1px solid #f0f0f0",borderRadius:12,padding:"14px 16px" }}>
                 <div style={{ fontSize:11,fontWeight:700,color:"#6B778C",marginBottom:4 }}>TOTAL KAS BON</div>
-                <div style={{ fontSize:20,fontWeight:900,color:"#FF8B00" }}>{kasBonList.length} entries</div>
+                <div style={{ fontSize:20,fontWeight:900,color:"#FF8B00" }}>{kasBonInPeriod.length} entries</div>
               </div>
               <div style={{ background:"#fff",border:"1px solid #f0f0f0",borderRadius:12,padding:"14px 16px" }}>
                 <div style={{ fontSize:11,fontWeight:700,color:"#6B778C",marginBottom:4 }}>SUDAH DIPOTONG</div>
-                <div style={{ fontSize:20,fontWeight:900,color:"#00875A" }}>{fmt(kasBonList.filter(k=>k.status==="deducted").reduce((a,k)=>a+k.amount,0))}</div>
+                <div style={{ fontSize:20,fontWeight:900,color:"#00875A" }}>{fmt(kasBonInPeriod.filter(k=>k.status==="deducted").reduce((a,k)=>a+k.amount,0))}</div>
               </div>
             </div>
             <button onClick={()=>setKasBonModal(true)} className="bo-btn bo-btn-primary" style={{ width:"100%" }}>+ Kas Bon</button>
@@ -974,7 +983,7 @@ export default function Accounting() {
                     </Fragment>
                   )
                 })}
-                {kasBonList.length===0&&<tr><td colSpan={6} style={{ textAlign:"center",color:"var(--ink5)",padding:"32px 0" }}>No kas bon records</td></tr>}
+                {kasBonInPeriod.length===0&&<tr><td colSpan={6} style={{ textAlign:"center",color:"var(--ink5)",padding:"32px 0" }}>No kas bon records</td></tr>}
               </tbody>
             </table>
           </div>
