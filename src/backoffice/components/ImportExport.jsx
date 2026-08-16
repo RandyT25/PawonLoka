@@ -11,7 +11,7 @@ const MODULES = {
     table: "ingredients",
     exportCols: ["id","name","unit","category","stock","min_stock","cost_per_unit","supplier"],
     importKey: "id",
-    headers: ["id*","name*","unit*","category","stock","min_stock","cost_per_unit","supplier"],
+    headers: ["id*","name*","unit*","category*","stock","min_stock","cost_per_unit","supplier"],
   },
   products: {
     label: "Products",
@@ -100,6 +100,11 @@ export default function ImportExport() {
           } else {
             // Insert new
             if (active==="ingredients") {
+              // A blank category cell used to silently omit the field from the insert
+              // entirely, leaving new ingredients with no category (they'd then show as
+              // "General"/uncategorized everywhere) — reject instead, matching the "id*"/
+              // "name*" required-field convention already used for this module.
+              if (!payload.category) { errors++; continue }
               payload.id = payload.id || "ING-"+(payload.sku||"").replace(/[^a-zA-Z0-9]/g,"").slice(0,10)+"-"+Math.random().toString(36).slice(2,6)
               payload.conversions = payload.conversions || []
               payload.stock = parseFloat(payload.stock)||0

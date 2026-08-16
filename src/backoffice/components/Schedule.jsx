@@ -24,37 +24,29 @@ const OFF_RULES = {
   Monday:2, Tuesday:1, Wednesday:1, Thursday:1, Friday:1, Saturday:0, Sunday:1
 }
 
-// Cascade auto-fill for a day given who is OFF and staff list
-function autoFillDay(day, off, staff) {
-  const available = staff.filter(n => !off.includes(n))
-  const avail = n => available.includes(n)
+// A staff member is eligible for a station if their Staff-tab role tags include it — plus a
+// small alias list for roles that don't literally match a station name but clearly belong to
+// one in practice (e.g. "Cook"/"Head Cook" both work Kitchen). Extend this if new roles need
+// a home station.
+const STATION_ROLE_ALIASES = { Kitchen: ["Kitchen","Cook","Head Cook"] }
 
-  // Bar primary = Mahes. If Mahes is off, Nita covers Bar and Uti takes Kasir.
-  // Nita is off: Uti takes Kasir, Mahes stays on Bar.
-  // Normal: Mahes on Bar, Nita on Kasir.
-  let kasir, bar
-  if (!avail("Mahes")) {
-    bar   = avail("Nita") ? "Nita" : ""
-    kasir = avail("Uti")  ? "Uti"  : ""
-  } else if (!avail("Nita")) {
-    bar   = "Mahes"
-    kasir = avail("Uti") ? "Uti" : ""
-  } else {
-    bar   = "Mahes"
-    kasir = "Nita"
-  }
-
-  // Bakar: Yudi first, Meldy as backup
-  const bakarCandidates = ["Yudi","Meldy"].filter(n => avail(n) && n !== kasir && n !== bar)
-  const bakar = bakarCandidates[0] || ""
-
-  // Snack: Alin always (when available), Uti only when not on Kasir
-  const snack = ["Alin","Uti"].filter(n => avail(n) && n !== kasir)
-
-  // Kitchen: Oji + Meldy, whoever is available and not on Bakar
-  const kitchen = ["Oji","Meldy"].filter(n => avail(n) && n !== bakar)
-
-  return { off, Kasir:kasir?[kasir]:[], Bar:bar?[bar]:[], Bakar:bakar?[bakar]:[], Snack:snack, Kitchen:kitchen }
+// Cascade auto-fill for a day given who is OFF and the real staff roster (with .role tags
+// from the Staff tab) — previously this matched a hardcoded list of 7 specific staff names
+// via if/else branches, so a roster change (rename, new hire, someone leaving) silently left
+// stations empty for anyone not in that original list, with no explanation. Now driven
+// entirely by data already editable in the Staff/Departments tabs: eligibility = active,
+// available today, and tagged for that station (directly or via the alias list above).
+function autoFillDay(day, off, staffRows) {
+  const available = staffRows.filter(s => s.active !== false && !off.includes(s.name))
+  const assigned = new Set()
+  const result = { off }
+  STATIONS.forEach(station => {
+    const roleNames = STATION_ROLE_ALIASES[station] || [station]
+    const eligible = available.filter(s => !assigned.has(s.name) && (s.role||[]).some(r => roleNames.includes(r)))
+    result[station] = eligible.map(s => s.name)
+    eligible.forEach(s => assigned.add(s.name))
+  })
+  return result
 }
 
 function validateDay(day, dayData) {
@@ -68,6 +60,13 @@ function validateDay(day, dayData) {
   if (!(dayData.Kasir||[]).length) errors.push("Kasir is empty")
   if (!(dayData.Bar||[]).length)   errors.push("Bar is empty")
   if (!(dayData.Bakar||[]).length) errors.push("Bakar is empty")
+
+  // Same person assigned to more than one station the same day — previously unchecked.
+  const seen = new Set(), dupes = new Set()
+  STATIONS.forEach(station => {
+    (dayData[station]||[]).forEach(name => { if (seen.has(name)) dupes.add(name); seen.add(name) })
+  })
+  if (dupes.size) errors.push(`${[...dupes].join(", ")} assigned to more than one station`)
 
   return errors
 }
@@ -182,7 +181,7 @@ export default function Schedule() {
     const newDays = {}
     DAYS.forEach(day => {
       const off = DEFAULT_OFF[day]||[]
-      newDays[day] = autoFillDay(day, off, staff)
+      newDays[day] = autoFillDay(day, off, staffRows)
     })
     setDays(newDays)
     save(newDays)
@@ -194,13 +193,24 @@ export default function Schedule() {
     setEditDay(day)
   }
 
+  // Toggling one person's OFF status used to regenerate the ENTIRE day via autoFillDay,
+  // silently wiping out any manual station assignment made earlier in the same edit session
+  // for every other staff member — not just the one being toggled. Now it only touches the
+  // specific person: going OFF removes them from whatever station they're in (can't work
+  // while off); coming back ON just clears the OFF flag and leaves stations untouched (a
+  // manager places them via the station buttons, or hits "Auto-fill Roles" for a full reset).
   function toggleOff(name) {
     setEditForm(f => {
       const off = f.off||[]
-      const newOff = off.includes(name) ? off.filter(n=>n!==name) : [...off,name]
-      // Auto-cascade when OFF changes
-      const cascaded = autoFillDay(editDay, newOff, staff)
-      return cascaded
+      const goingOff = !off.includes(name)
+      const newOff = goingOff ? [...off, name] : off.filter(n=>n!==name)
+      const next = { ...f, off: newOff }
+      if (goingOff) {
+        STATIONS.forEach(station => {
+          if ((next[station]||[]).includes(name)) next[station] = next[station].filter(n=>n!==name)
+        })
+      }
+      return next
     })
   }
 
@@ -519,7 +529,7 @@ export default function Schedule() {
             </div>
             <div className="bo-modal-footer">
               <button onClick={()=>setEditDay(null)} className="bo-btn bo-btn-ghost">Cancel</button>
-              <button onClick={()=>{ setEditForm(autoFillDay(editDay,editForm.off||[],staff)) }} className="bo-btn bo-btn-ghost">Auto-fill Roles</button>
+              <button onClick={()=>{ setEditForm(autoFillDay(editDay,editForm.off||[],staffRows)) }} className="bo-btn bo-btn-ghost">Auto-fill Roles</button>
               <button onClick={saveDay} className="bo-btn bo-btn-primary">Save</button>
             </div>
           </div>

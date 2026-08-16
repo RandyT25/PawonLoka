@@ -1,4 +1,5 @@
-export const FOOD_CATEGORIES_FALLBACK   = ["Semi-finished","Poultry","Meat","Seafood","Vegetables","Fruits","Spices & Herbs","Dry Goods","Sauce","Beverages","Dairy","Bakery","General"]
+// "General" deliberately excluded — every ingredient needs a real category, not a catch-all.
+export const FOOD_CATEGORIES_FALLBACK   = ["Semi-finished","Poultry","Meat","Seafood","Vegetables","Fruits","Spices & Herbs","Dry Goods","Sauce","Beverages","Dairy","Bakery"]
 export const SUPPLY_CATEGORIES_FALLBACK = ["Packaging","Disposables","Trash & Vacuum Bags","Cleaning & Sanitation","Kitchen Tools & Utensils","Office & Stationery","Charcoal","Other Supplies"]
 
 // Mutable at runtime — Backoffice.jsx fetches app_settings.{food,supply}_categories once

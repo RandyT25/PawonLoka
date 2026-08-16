@@ -6,6 +6,13 @@ function withTimeout(promise, ms) {
   return Promise.race([promise, new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), ms))])
 }
 
+// role comes from the live `staff` table as an array (e.g. ["Owner"]) but the hardcoded
+// fallback staff list POS starts with before that loads uses a plain string — handle both.
+function isOwnerRole(s) {
+  const role = s?.role
+  return Array.isArray(role) ? role.includes('Owner') : role === 'Owner'
+}
+
 export default function ClockInOutModal({ show, onClose, staff, staffList }) {
   const [clockStaff, setClockStaff] = useState(null)
   const [clockPhoto, setClockPhoto] = useState(null)
@@ -94,7 +101,12 @@ export default function ClockInOutModal({ show, onClose, staff, staffList }) {
               }} />
           </label>
         ) : null}
-        {clockStaff && <button disabled={clockSaving} onClick={async()=>{
+        {clockStaff && !clockPhoto && !isOwnerRole(clockStaff) && (
+          <div style={{ fontSize:12, color:'#DC2626', fontWeight:600, textAlign:'center', marginBottom:10 }}>
+            Foto wajib untuk clock in/out
+          </div>
+        )}
+        {clockStaff && <button disabled={clockSaving || (!clockPhoto && !isOwnerRole(clockStaff))} onClick={async()=>{
           setClockSaving(true)
           const now=new Date()
           const today=now.toISOString().slice(0,10)
@@ -118,7 +130,10 @@ export default function ClockInOutModal({ show, onClose, staff, staffList }) {
           setClockSaving(false)
           onClose()
           alert(isOut?"Clocked out!":"Clocked in!")
-        }} style={{ width:'100%',padding:14,borderRadius:12,border:'none',fontSize:15,fontWeight:700,cursor:'pointer',background:todayAtt?.clock_in&&!todayAtt?.clock_out?"#DC2626":"#059669",color:'#fff' }}>
+        }} style={{ width:'100%',padding:14,borderRadius:12,border:'none',fontSize:15,fontWeight:700,
+          cursor: clockSaving || (!clockPhoto && !isOwnerRole(clockStaff)) ? 'not-allowed' : 'pointer',
+          background: (!clockPhoto && !isOwnerRole(clockStaff)) ? '#94A3B8' : (todayAtt?.clock_in&&!todayAtt?.clock_out?"#DC2626":"#059669"),
+          color:'#fff' }}>
           {clockSaving?"Saving...":(todayAtt?.clock_in&&!todayAtt?.clock_out?"✓ Clock Out":"✓ Clock In")}
         </button>}
       </div>

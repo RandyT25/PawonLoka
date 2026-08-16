@@ -15,8 +15,15 @@ const EXPENSE_CATEGORIES = [
   { id:"pdam",            label:"PDAM (Air)",         icon:"💧", auto:false },
   { id:"wifi",            label:"WiFi / Internet",    icon:"📶", auto:false },
   { id:"ipl",             label:"IPL",                icon:"🏢", auto:false },
-  { id:"staff_meal",      label:"Staff Meal",         icon:"🍱", auto:false },
+  // Staff Meal used to be a manual-only bucket that nothing ever actually populated (staff
+  // submit meal reports through Staff Reports, but that data never reached here) — now
+  // auto-computed live from staff_consumption, same as Waste from waste_records and Stock
+  // Variance from stock_opname. All three follow the existing bahan_baku/gaji pattern:
+  // period-scoped live query, no manual double-entry required.
+  { id:"staff_meal",      label:"Staff Meal",         icon:"🍱", auto:true  },
   { id:"gaji",            label:"Gaji Karyawan",      icon:"👥", auto:true  },
+  { id:"waste",           label:"Waste",              icon:"🗑️", auto:true  },
+  { id:"stock_variance",  label:"Selisih Stok Opname", icon:"📉", auto:true  },
   { id:"kas_bon",         label:"Kas Bon",            icon:"💸", auto:false },
   { id:"sewa",            label:"Sewa & Fasilitas",   icon:"🏠", auto:false },
   { id:"marketing",       label:"Marketing",           icon:"📣", auto:false },
@@ -76,6 +83,9 @@ export default function Accounting() {
   const [ingredients,  setIngredients]  = useState([])
   const [staff,        setStaff]        = useState([])
   const [kasBonList,   setKasBonList]   = useState([])
+  const [wasteRecords,     setWasteRecords]     = useState([])
+  const [staffConsumption, setStaffConsumption] = useState([])
+  const [stockOpnameList,  setStockOpnameList]  = useState([])
   const [openingBal,   setOpeningBal]   = useState(() => ({ id: new Date().toISOString().slice(0,7), amount:300000 }))
   const [loading,      setLoading]      = useState(true)
   const [expModal,     setExpModal]     = useState(false)
@@ -153,7 +163,7 @@ export default function Accounting() {
     const from = `${y}-${m}-01`
     const to   = new Date(parseInt(y), parseInt(m), 0).toISOString().slice(0,10)
 
-    const [ordRes, expRes, poRes, staffRes, kbRes, obRes, ingRes] = await Promise.all([
+    const [ordRes, expRes, poRes, staffRes, kbRes, obRes, ingRes, wasteRes, consumeRes, opnameRes] = await Promise.all([
       supabase.from("orders").select("*").eq("status","Paid").gte("created_at",from+"T00:00:00+08:00").lte("created_at",to+"T23:59:59+08:00"),
       supabase.from("expenses").select("*").gte("date",from).lte("date",to).order("date",{ascending:false}),
       supabase.from("purchase_orders").select("*").eq("status","Paid").gte("date",from).lte("date",to),
@@ -161,6 +171,9 @@ export default function Accounting() {
       supabase.from("kas_bon").select("*").order("date",{ascending:false}),
       supabase.from("opening_balance").select("*").eq("id",period).maybeSingle(),
       supabase.from("ingredients").select("id,category"),
+      supabase.from("waste_records").select("*").gte("date",from).lte("date",to),
+      supabase.from("staff_consumption").select("*").gte("date",from).lte("date",to),
+      supabase.from("stock_opname").select("id,date,total_variance").gte("date",from).lte("date",to),
     ])
 
     setOrders(ordRes.data||[])
@@ -170,6 +183,9 @@ export default function Accounting() {
     setKasBonList(kbRes.data||[])
     setOpeningBal(obRes.data || { id:period, amount:300000 })
     setIngredients(ingRes.data||[])
+    setWasteRecords(wasteRes.data||[])
+    setStaffConsumption(consumeRes.data||[])
+    setStockOpnameList(opnameRes.data||[])
     setLoading(false)
   }
 
@@ -268,7 +284,16 @@ export default function Accounting() {
   const manualExpenses = expenses.filter(e=>e.auto_source!=="po"&&e.auto_source!=="salary")
   const manualTotal    = manualExpenses.reduce((a,e)=>a+(e.amount||0),0)
 
-  const totalOpex  = nonFoodPOTotal + salaryTotal + manualTotal
+  // Auto opex from Staff Reports approvals — mirrors the PO/salary pattern: live period-scoped
+  // sums, not manual expense entry, so a manager doesn't have to re-log what staff already
+  // submitted and got approved.
+  const wasteTotal    = wasteRecords.reduce((a,w)=>a+(w.cost||0),0)
+  const staffMealTotal = staffConsumption.reduce((a,c)=>a+(c.cost||0),0)
+  // Only net shrinkage (counted less than expected) is a real cost — a net-positive opname
+  // (counted more than expected) isn't "found money" to record as negative expense.
+  const stockVarianceTotal = stockOpnameList.reduce((a,o)=>a+Math.max(0,-(o.total_variance||0)),0)
+
+  const totalOpex  = nonFoodPOTotal + salaryTotal + manualTotal + wasteTotal + staffMealTotal + stockVarianceTotal
   const netProfit  = grossProfit - totalOpex
   const netMargin  = netRevenue>0 ? Math.round((netProfit/netRevenue)*100) : 0
 
@@ -400,6 +425,9 @@ export default function Accounting() {
       ["Laba Kotor", fmt(grossProfit) + " (" + grossMargin + "%)"],
       ["Bahan Baku (PO) — info, sudah di COGS", fmt(bahanBakuPO)],
       ["Gaji Karyawan", fmt(salaryTotal)],
+      ["Staff Meal", fmt(staffMealTotal)],
+      ["Waste", fmt(wasteTotal)],
+      ["Selisih Stok Opname", fmt(stockVarianceTotal)],
       ...EXPENSE_CATEGORIES.filter(c=>!c.auto).map(c=>[c.label, fmt(catTotal(c.id))]),
       ["Total Beban", fmt(totalOpex)],
       ["Laba Bersih", fmt(netProfit) + " (" + netMargin + "%)"],
@@ -441,6 +469,9 @@ export default function Accounting() {
             ["Laba Kotor", grossProfit],
             ["Bahan Baku (PO) — info, sudah di COGS", bahanBakuPO],
             ["Gaji Karyawan", salaryTotal],
+            ["Staff Meal", staffMealTotal],
+            ["Waste", wasteTotal],
+            ["Selisih Stok Opname", stockVarianceTotal],
             ...EXPENSE_CATEGORIES.filter(c=>!c.auto).map(c=>[c.label, catTotal(c.id)]),
             ["Total Beban", totalOpex],
             ["Laba Bersih", netProfit],
@@ -562,6 +593,9 @@ export default function Accounting() {
               )}
               {[
                 ["👥 Gaji Karyawan",salaryTotal],
+                ["🍱 Staff Meal",staffMealTotal],
+                ["🗑️ Waste",wasteTotal],
+                ["📉 Selisih Stok Opname",stockVarianceTotal],
                 ...EXPENSE_CATEGORIES.filter(c=>!c.auto).map(c=>[c.icon+" "+c.label,catTotal(c.id)]),
               ].filter(([,v])=>v>0).map(([l,v])=>(
                 <div key={l} style={{ marginBottom:10 }}>
@@ -624,6 +658,9 @@ export default function Accounting() {
             <div style={{ fontSize:11,fontWeight:800,color:"#FF8B00",textTransform:"uppercase",letterSpacing:"0.5px",marginBottom:8,paddingBottom:4,borderBottom:"2px solid #FF8B00" }}>BEBAN OPERASIONAL</div>
             {[
               ["Gaji Karyawan",salaryTotal],
+              ["Staff Meal",staffMealTotal],
+              ["Waste",wasteTotal],
+              ["Selisih Stok Opname",stockVarianceTotal],
               ...EXPENSE_CATEGORIES.filter(c=>!c.auto).map(c=>[c.label,catTotal(c.id)]),
               ["Total Beban",totalOpex],
             ].map(([l,v])=>(
@@ -684,6 +721,21 @@ export default function Accounting() {
               <div style={{ fontSize:11,fontWeight:700,color:"#6B778C",marginBottom:4 }}>👥 GAJI (AUTO)</div>
               <div style={{ fontSize:20,fontWeight:900,color:"#0052CC" }}>{fmt(salaryTotal)}</div>
               <div style={{ fontSize:11,color:"#6B778C" }}>{staff.length} staff members</div>
+            </div>
+            <div style={{ background:"#fff",border:"1px solid #f0f0f0",borderRadius:12,padding:"14px 16px" }}>
+              <div style={{ fontSize:11,fontWeight:700,color:"#6B778C",marginBottom:4 }}>🍱 STAFF MEAL (AUTO)</div>
+              <div style={{ fontSize:20,fontWeight:900,color:"#F59E0B" }}>{fmt(staffMealTotal)}</div>
+              <div style={{ fontSize:11,color:"#6B778C" }}>{staffConsumption.length} entries — from approved Staff Reports</div>
+            </div>
+            <div style={{ background:"#fff",border:"1px solid #f0f0f0",borderRadius:12,padding:"14px 16px" }}>
+              <div style={{ fontSize:11,fontWeight:700,color:"#6B778C",marginBottom:4 }}>🗑️ WASTE (AUTO)</div>
+              <div style={{ fontSize:20,fontWeight:900,color:"#DE350B" }}>{fmt(wasteTotal)}</div>
+              <div style={{ fontSize:11,color:"#6B778C" }}>{wasteRecords.length} entries — from approved Staff Reports</div>
+            </div>
+            <div style={{ background:"#fff",border:"1px solid #f0f0f0",borderRadius:12,padding:"14px 16px" }}>
+              <div style={{ fontSize:11,fontWeight:700,color:"#6B778C",marginBottom:4 }}>📉 SELISIH STOK OPNAME (AUTO)</div>
+              <div style={{ fontSize:20,fontWeight:900,color:"#DE350B" }}>{fmt(stockVarianceTotal)}</div>
+              <div style={{ fontSize:11,color:"#6B778C" }}>{stockOpnameList.length} sesi opname periode ini — hanya selisih kurang (shrinkage)</div>
             </div>
             <div style={{ background:"#fff",border:"1px solid #f0f0f0",borderRadius:12,padding:"14px 16px" }}>
               <div style={{ fontSize:11,fontWeight:700,color:"#6B778C",marginBottom:4 }}>✏️ MANUAL EXPENSES</div>

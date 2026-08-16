@@ -8,9 +8,10 @@ const fmt    = n => "Rp " + Number(n||0).toLocaleString("id-ID")
 const fmtQty = (n, unit) => Number(n||0).toLocaleString("id-ID", { maximumFractionDigits:2 }) + (unit ? " " + unit : "")
 
 const STATUS_CFG = {
-  out:  { label:"Habis",    bg:"#FFEBE6", color:"#DE350B" },
-  low:  { label:"Menipis",  bg:"#FFF7E6", color:"#FF8B00" },
-  ok:   { label:"Cukup",    bg:"#E3FCEF", color:"#00875A" },
+  out:   { label:"Habis",       bg:"#FFEBE6", color:"#DE350B" },
+  low:   { label:"Menipis",     bg:"#FFF7E6", color:"#FF8B00" },
+  ok:    { label:"Cukup",       bg:"#E3FCEF", color:"#00875A" },
+  unset: { label:"Belum diset", bg:"#F1F5F9", color:"#64748B" },
 }
 
 export default function InvStockCompare() {
@@ -77,11 +78,15 @@ export default function InvStockCompare() {
       const po      = purchased[ing.id] || { qty: 0, cost: 0 }
       const stock   = parseFloat(ing.stock   || 0)
       const minStock= parseFloat(ing.min_stock || 0)
+      const stockValue = stock * (parseFloat(ing.cost_per_unit || 0))
       let status = "ok"
-      if (stock <= 0)                       status = "out"
-      else if (minStock > 0 && stock < minStock) status = "low"
-      const coverPct = minStock > 0 ? Math.min(100, Math.round(stock / minStock * 100)) : null
-      return { ...ing, purchasedQty: po.qty, purchasedCost: po.cost, stock, minStock, status, coverPct }
+      if (minStock <= 0)                    status = stock <= 0 ? "out" : "unset"
+      else if (stock <= 0)                  status = "out"
+      else if (stock < minStock)            status = "low"
+      // Uncapped, for the numeric readout (so 5x-overstocked isn't indistinguishable from
+      // exactly-at-minimum) — only the bar's fill width gets capped at 100%, separately, below.
+      const coverPct = minStock > 0 ? Math.round(stock / minStock * 100) : null
+      return { ...ing, purchasedQty: po.qty, purchasedCost: po.cost, stock, minStock, stockValue, status, coverPct }
     })
   }, [ingredients, purchased])
 
@@ -99,9 +104,10 @@ export default function InvStockCompare() {
       })
   }, [rows, search, statusFilter, showPurchased])
 
-  const totalSpend     = Object.values(purchased).reduce((s,x) => s + x.cost, 0)
-  const purchasedCount = rows.filter(r => r.purchasedQty > 0).length
-  const alertCount     = rows.filter(r => r.status !== "ok").length
+  const totalSpend      = Object.values(purchased).reduce((s,x) => s + x.cost, 0)
+  const totalStockValue = filtered.reduce((s,r) => s + r.stockValue, 0)
+  const purchasedCount  = filtered.filter(r => r.purchasedQty > 0).length
+  const alertCount      = filtered.filter(r => r.status === "out" || r.status === "low").length
   const periodLabel    = formatPeriodLabel(range, customDate, customDateTo)
   const slug           = filenameSlug(range, customDate, customDateTo)
 
@@ -164,11 +170,13 @@ export default function InvStockCompare() {
         </div>
       )}
 
-      {/* KPI cards */}
+      {/* KPI cards — scoped to whatever's currently filtered/visible in the table below, so
+          these numbers always match what's on screen instead of the store-wide totals. */}
       <div className="bo-rekon-kpi">
         {[
-          ["Total Belanja", fmt(totalSpend), "#0052CC", "periode ini"],
-          ["Bahan Dibeli",  purchasedCount + " bahan", "#00875A", "ada pembelian"],
+          ["Total Belanja", fmt(totalSpend), "#0052CC", "pembelian periode ini"],
+          ["Nilai Stok Saat Ini", fmt(totalStockValue), "#6554C0", "stok × harga saat ini"],
+          ["Bahan Dibeli",  purchasedCount + " bahan", "#00875A", "ada pembelian periode ini"],
           ["Perlu Perhatian", alertCount + " bahan", alertCount > 0 ? "#DE350B" : "#00875A", alertCount > 0 ? "stok menipis / habis" : "semua aman"],
         ].map(([l, v, c, sub]) => (
           <div key={l} style={{ background:"#fff", borderRadius:12, padding:"14px 16px", border:"1px solid var(--surface3)", borderTop:"3px solid " + c }}>
@@ -185,7 +193,7 @@ export default function InvStockCompare() {
           value={search} onChange={e => setSearch(e.target.value)}
           className="bo-input" placeholder="Cari bahan..." style={{ width:200 }} />
         <div style={{ display:"flex", gap:4, flexWrap:"wrap" }}>
-          {[["all","Semua"],["low","Menipis"],["out","Habis"]].map(([v,l]) => (
+          {[["all","Semua"],["low","Menipis"],["out","Habis"],["unset","Belum diset"]].map(([v,l]) => (
             <button key={v} onClick={() => { setStatusFilter(v); setShowPurchased(false) }}
               className={"bo-btn bo-btn-sm " + (statusFilter === v && !showPurchased ? "bo-btn-primary" : "bo-btn-ghost")}>
               {l}
@@ -202,6 +210,17 @@ export default function InvStockCompare() {
       </div>
 
       {/* Table */}
+      <div style={{ fontSize:11.5, color:"var(--ink5)", margin:"0 2px 8px", display:"flex", gap:16, flexWrap:"wrap" }}>
+        <span>ℹ️ <strong>Dibeli</strong> &amp; <strong>Nilai Beli</strong> mengikuti periode yang dipilih di atas — <strong>Stok Saat Ini</strong> dan <strong>Min Stok</strong> selalu nilai terkini (tidak terikat periode).</span>
+        <span style={{ marginLeft:"auto", display:"flex", gap:10, alignItems:"center" }}>
+          {Object.entries(STATUS_CFG).map(([k,cfg]) => (
+            <span key={k} style={{ display:"flex", alignItems:"center", gap:4 }}>
+              <span style={{ width:8, height:8, borderRadius:"50%", background:cfg.color, display:"inline-block" }} />
+              {cfg.label}
+            </span>
+          ))}
+        </span>
+      </div>
       <div className="bo-card" style={{ padding:0, overflowX:"auto" }}>
         {loading ? (
           <div style={{ padding:40, textAlign:"center", color:"var(--ink5)" }}>Memuat...</div>
@@ -215,7 +234,7 @@ export default function InvStockCompare() {
                 <th style={{ textAlign:"right" }}>NILAI BELI</th>
                 <th style={{ textAlign:"right" }}>STOK SAAT INI</th>
                 <th style={{ textAlign:"right" }}>MIN STOK</th>
-                <th>COVERAGE</th>
+                <th title="Stok saat ini ÷ Min Stok">COVERAGE (STOK ÷ MIN)</th>
                 <th>STATUS</th>
               </tr>
             </thead>
@@ -242,15 +261,17 @@ export default function InvStockCompare() {
                       {fmtQty(r.stock)}
                     </td>
                     <td style={{ textAlign:"right", color:"var(--ink4)", fontSize:12 }}>
-                      {r.minStock > 0 ? fmtQty(r.minStock) : "—"}
+                      {r.minStock > 0 ? fmtQty(r.minStock) : <span style={{ color:"#94A3B8", fontStyle:"italic" }}>belum diset</span>}
                     </td>
-                    <td style={{ minWidth:90 }}>
+                    <td style={{ minWidth:100 }}>
                       {r.minStock > 0 ? (
                         <div style={{ display:"flex", alignItems:"center", gap:6 }}>
                           <div style={{ flex:1, height:5, background:"var(--surface2)", borderRadius:3, overflow:"hidden" }}>
                             <div style={{ height:"100%", width: Math.min(100, r.coverPct) + "%", background: r.status === "out" ? "#DE350B" : r.status === "low" ? "#FF8B00" : "#00875A", borderRadius:3 }} />
                           </div>
-                          <span style={{ fontSize:10, color:"var(--ink5)", width:32, textAlign:"right", flexShrink:0 }}>{r.coverPct}%</span>
+                          <span style={{ fontSize:10, color: r.coverPct > 100 ? "#0052CC" : "var(--ink5)", fontWeight: r.coverPct > 100 ? 700 : 400, width:36, textAlign:"right", flexShrink:0 }}>
+                            {r.coverPct}%
+                          </span>
                         </div>
                       ) : <span style={{ color:"var(--ink5)", fontSize:11 }}>—</span>}
                     </td>

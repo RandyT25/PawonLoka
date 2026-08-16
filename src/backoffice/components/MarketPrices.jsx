@@ -52,7 +52,7 @@ export default function MarketPrices() {
       return {
         ingredient_id:   i.id,
         name:            i.name,
-        category:        i.category || "General",
+        category:        i.category || "Uncategorized",
         base_unit:       i.unit || "gr",
         buy_unit:        lastPrice?.unit || conv?.unit || i.unit || "gr",
         conv_qty:        lastPrice?.conv_qty || conv?.qty || 1,

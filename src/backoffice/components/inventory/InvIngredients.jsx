@@ -7,8 +7,11 @@ function fmtDec(n) { return "Rp " + Number(n||0).toLocaleString("id-ID", { minim
 
 const UNITS_FALLBACK = ["gr","kg","ml","L","Galon","pcs","Ekor","butir","biji","buah","ikat","lembar","bungkus","pack","sachet","botol","Can","tsp","tbsp","cup","porsi","portion","slice"]
 function emptyForm(mode) {
+  // No default category pre-selection — every ingredient needs a deliberate choice, not a
+  // silent "General"/"Other Supplies" fallback (that's exactly how items kept landing in a
+  // category nobody meant to pick). save() blocks submission until one is actually chosen.
   return { name:"", sku:"", unit:"gr", min_stock:0, stock:0, cost_per_unit:0, supplier:"",
-    category: mode==="supplies" ? "Other Supplies" : "General",
+    category: "",
     track_stock: mode!=="supplies",
     station:["Kitchen"], conversions:[], last_purchase_price:0, last_purchase_unit:"" }
 }
@@ -121,7 +124,7 @@ export default function InvIngredients({ mode="ingredients" }) {
   function closeModal() { setModal(null); setForm(EMPTY); setConvs([]) }
 
   // Bulk add — quick multi-row grid for adding several items at once
-  function emptyBulkRow() { return { name:"", unit:"gr", category:categoryOptions[0], stock:0, cost_per_unit:0, supplier:"" } }
+  function emptyBulkRow() { return { name:"", unit:"gr", category:"", stock:0, cost_per_unit:0, supplier:"" } }
   function openBulk()            { setBulkRows(Array.from({length:5}, emptyBulkRow)); setBulkModal(true) }
   function closeBulk()           { setBulkModal(false); setBulkRows([]) }
   function addBulkRow()          { setBulkRows(r => [...r, emptyBulkRow()]) }
@@ -131,13 +134,15 @@ export default function InvIngredients({ mode="ingredients" }) {
   async function saveBulk() {
     const valid = bulkRows.filter(r => r.name.trim())
     if (!valid.length) return
+    const missingCat = valid.filter(r => !r.category)
+    if (missingCat.length) { alert("Pilih kategori untuk semua baris terlebih dahulu: " + missingCat.map(r=>r.name.trim()).join(", ")); return }
     setBulkSaving(true)
     const payload = valid.map((r,idx) => ({
       id:            "ING-"+Date.now()+"-"+idx,
       name:          r.name.trim(),
       sku:           r.name.trim().toLowerCase().replace(/\s+/g,"-").slice(0,20),
       unit:          r.unit,
-      category:      r.category || categoryOptions[0],
+      category:      r.category,
       stock:         parseFloat(r.stock)||0,
       min_stock:     0,
       cost_per_unit: parseFloat(r.cost_per_unit)||0,
@@ -177,6 +182,7 @@ export default function InvIngredients({ mode="ingredients" }) {
 
   async function save() {
     if (!form.name) return
+    if (!form.category) { alert("Pilih kategori terlebih dahulu."); return }
     // Warn on a conversion factor that's almost certainly wrong (e.g. "1 kg = 1 gr" instead of 1000) —
     // this silently inflates WAC by orders of magnitude once a purchase is made in that unit.
     const BIG_UNITS = ["kg","L","Galon","dus","karung","box","sack","pack","sachet","bungkus","botol","ikat"]
@@ -198,7 +204,7 @@ export default function InvIngredients({ mode="ingredients" }) {
       stock:              parseFloat(form.stock)||0,
       cost_per_unit:      wac || parseFloat(form.cost_per_unit)||0,
       supplier:           form.supplier||null,
-      category:           form.category||"General",
+      category:           form.category,
       track_stock:        form.track_stock !== false,
       station:            Array.isArray(form.station)&&form.station.length ? form.station : ["Kitchen"],
       conversions:        convs,
@@ -308,7 +314,9 @@ export default function InvIngredients({ mode="ingredients" }) {
                           className="bo-select" style={{ fontSize:12 }} onClick={e=>e.stopPropagation()}>
                           {categoryOptions.map(c=><option key={c}>{c}</option>)}
                         </select>
-                      ) : <span className="bo-badge bo-badge-blue">{i.category||"General"}</span>}
+                      ) : i.category
+                          ? <span className="bo-badge bo-badge-blue">{i.category}</span>
+                          : <span className="bo-badge" style={{ background:"var(--red-lt)", color:"var(--red)" }} title="No category set — click to fix">⚠ Uncategorized</span>}
                     </td>
                     <td>{i.unit}</td>
                     <td onClick={()=>!editing("stock")&&startQuickEdit(i,"stock")} style={{ cursor:"pointer", fontWeight:700, color:st.color }} title="Click to quick-edit">
@@ -377,11 +385,12 @@ export default function InvIngredients({ mode="ingredients" }) {
                 <div><label className="bo-label">SKU</label><input value={form.sku||""} onChange={e=>setForm(f=>({...f,sku:e.target.value}))} className="bo-input" placeholder="Auto if empty" /></div>
               </div>
               <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12, marginBottom:14 }}>
-                <div><label className="bo-label">Category</label>
-                  <select value={form.category||categoryOptions[0]} onChange={e=>{
+                <div><label className="bo-label">Category *</label>
+                  <select value={form.category||""} onChange={e=>{
                     const category = e.target.value
                     setForm(f=>({ ...f, category, track_stock: trackStockTouched ? f.track_stock : isFoodCategory(category) }))
-                  }} className="bo-select">
+                  }} className="bo-select" style={!form.category?{ borderColor:"var(--red)" }:undefined}>
+                    <option value="">— Select category —</option>
                     <CategoryOptions/>
                   </select>
                 </div>
@@ -510,7 +519,8 @@ export default function InvIngredients({ mode="ingredients" }) {
                   <select value={r.unit} onChange={e=>updateBulkRow(i,"unit",e.target.value)} className="bo-select" style={{ fontSize:12 }}>
                     {unitsList.map(u=><option key={u}>{u}</option>)}
                   </select>
-                  <select value={r.category} onChange={e=>updateBulkRow(i,"category",e.target.value)} className="bo-select" style={{ fontSize:12 }}>
+                  <select value={r.category} onChange={e=>updateBulkRow(i,"category",e.target.value)} className="bo-select" style={r.name.trim()&&!r.category?{ fontSize:12, borderColor:"var(--red)" }:{ fontSize:12 }}>
+                    <option value="">— Category —</option>
                     <CategoryOptions/>
                   </select>
                   <input type="number" value={r.stock} onChange={e=>updateBulkRow(i,"stock",e.target.value)} className="bo-input" style={{ fontSize:12 }} placeholder="0" />
