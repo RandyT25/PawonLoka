@@ -46,7 +46,9 @@ export default function StaffSubmissions() {
   const [suppliers,   setSuppliers]   = useState([])
   const [reqSelected, setReqSelected] = useState(new Set())
   const [typeFilter,  setTypeFilter]  = useState("all")
-  const [statusFilter,setStatusFilter]= useState("all")
+  // Defaults to "pending" — the main page should show what needs a decision today, not
+  // every historical Approved/Rejected submission mixed in at once.
+  const [statusFilter,setStatusFilter]= useState("pending")
   const [viewModal,   setViewModal]   = useState(null)
   const [liveStock,   setLiveStock]   = useState({}) // ingredient_id -> fresh stock, fetched when opening an opname review
   const [editModal,   setEditModal]   = useState(null)
@@ -726,21 +728,19 @@ export default function StaffSubmissions() {
         </div>
       )}
 
-      {/* Staff link */}
-      <div style={{ marginBottom:16, padding:"12px 16px", background:"var(--brand-lt)", borderRadius:"var(--r)", display:"flex", justifyContent:"space-between", alignItems:"center", flexWrap:"wrap", gap:8 }}>
-        <div>
-          <div style={{ fontSize:13, fontWeight:700, color:"var(--brand)" }}>Staff Mobile Link</div>
-          <div style={{ fontSize:12, color:"var(--ink4)", marginTop:2 }}>Share this link with your staff</div>
-        </div>
-        <div style={{ display:"flex", gap:8, alignItems:"center" }}>
-          <code style={{ fontSize:12, background:"#fff", padding:"5px 10px", borderRadius:8, border:"1px solid var(--surface3)" }}>{staffUrl}</code>
-          <button onClick={()=>navigator.clipboard.writeText(staffUrl)} className="bo-btn bo-btn-ghost bo-btn-sm">Copy</button>
-          <a href="/staff" target="_blank" className="bo-btn bo-btn-primary bo-btn-sm" style={{ textDecoration:"none" }}>Open</a>
-        </div>
+      {/* Staff link — compact single row; used rarely, shouldn't compete with the actual work below */}
+      <div style={{ marginBottom:12, padding:"6px 10px", display:"flex", justifyContent:"flex-end", alignItems:"center", gap:8 }}>
+        <span style={{ fontSize:11, color:"var(--ink5)" }}>Staff link:</span>
+        <code style={{ fontSize:11, color:"var(--ink4)" }}>{staffUrl}</code>
+        <button onClick={()=>navigator.clipboard.writeText(staffUrl)} className="bo-btn bo-btn-ghost bo-btn-sm" style={{ padding:"3px 9px", fontSize:11 }}>Copy</button>
+        <a href="/staff" target="_blank" className="bo-btn bo-btn-ghost bo-btn-sm" style={{ padding:"3px 9px", fontSize:11, textDecoration:"none" }}>Open</a>
       </div>
 
-      {/* Orphaned-approval warning — approved submissions with no matching stock_movements */}
-      {[...orphanApprovedIds].some(id => !dismissedOrphanIds.has(id)) && (
+      {/* Orphaned-approval warning — approved submissions with no matching stock_movements.
+          Only shown while looking at Approved (what it's actually about) — surfacing it on
+          top of the default Pending view would be exactly the always-on clutter this page
+          needed to lose. */}
+      {statusFilter==="approved" && [...orphanApprovedIds].some(id => !dismissedOrphanIds.has(id)) && (
         <div style={{ padding:"12px 16px", background:"var(--red-lt)", border:"1.5px solid var(--red)", borderRadius:"var(--r)", marginBottom:16, display:"flex", justifyContent:"space-between", alignItems:"flex-start", gap:12 }}>
           <div>
             <div style={{ fontWeight:700, color:"var(--red)", fontSize:13 }}>
@@ -754,34 +754,43 @@ export default function StaffSubmissions() {
         </div>
       )}
 
-      {/* Stats */}
-      <div className="bo-metrics" style={{ gridTemplateColumns:"repeat(3,1fr)", marginBottom:16 }}>
-        <div className="bo-met amber">
-          <div className="bo-met-label">Pending</div>
-          <div className="bo-met-val" style={{ display:"flex", alignItems:"center", gap:8 }}>
-            {pending.length}
-            {pending.length > 0 && <span style={{ fontSize:11, background:"var(--amber)", color:"#fff", borderRadius:20, padding:"1px 8px", fontWeight:700 }}>NEW</span>}
-          </div>
-        </div>
-        <div className="bo-met green"><div className="bo-met-label">Approved</div><div className="bo-met-val">{approved.length}</div></div>
-        <div className="bo-met red"><div className="bo-met-label">Rejected</div><div className="bo-met-val">{rejected.length}</div></div>
+      {/* Status tabs — doubles as both the count summary and the filter control (previously
+          two separate sections showing/doing overlapping things). Pending is the default
+          landing tab; "Show all" is a lightweight escape hatch for the rare cross-status look,
+          not an equal-weight 4th tab. */}
+      <div style={{ display:"flex", alignItems:"stretch", gap:10, marginBottom:14, flexWrap:"wrap" }}>
+        {[
+          ["pending",  "Pending",  "🕐", pending.length,  "amber"],
+          ["approved", "Approved", "✅", approved.length, "green"],
+          ["rejected", "Rejected", "❌", rejected.length, "red"],
+        ].map(([key,label,icon,count,color]) => {
+          const active = statusFilter===key
+          return (
+            <div key={key} onClick={()=>setStatusFilter(key)} className={"bo-met "+color}
+              style={{ cursor:"pointer", flex:"1 1 160px", minWidth:140, transition:"box-shadow 0.15s, opacity 0.15s",
+                boxShadow: active ? "0 0 0 2px var(--"+color+")" : "none",
+                opacity: active ? 1 : 0.55 }}>
+              <div className="bo-met-label">{icon} {label}</div>
+              <div className="bo-met-val" style={{ display:"flex", alignItems:"center", gap:8 }}>
+                {count}
+                {key==="pending" && count > 0 && <span style={{ fontSize:11, background:"var(--amber)", color:"#fff", borderRadius:20, padding:"1px 8px", fontWeight:700 }}>NEW</span>}
+              </div>
+            </div>
+          )
+        })}
+        <button onClick={()=>setStatusFilter("all")}
+          style={{ background:"none", border:"none", color: statusFilter==="all"?"var(--brand)":"var(--ink5)", fontSize:12, fontWeight:600, cursor:"pointer", alignSelf:"center", padding:"0 4px", textDecoration: statusFilter==="all"?"underline":"none" }}>
+          Show all →
+        </button>
       </div>
 
-      {/* Filters */}
-      <div style={{ display:"flex", gap:8, marginBottom:12, flexWrap:"wrap", alignItems:"center" }}>
-        <div style={{ display:"flex", gap:4 }}>
-          {[["all","All Types"],["opname","Stock Count"],["waste","Waste"],["consumption","Staff Meal"],["production","Production"],["requisition","Request"]].map(([f,l])=>(
-            <button key={f} onClick={()=>setTypeFilter(f)}
-              className={"bo-btn bo-btn-sm "+(typeFilter===f?"bo-btn-primary":"bo-btn-ghost")}
-              style={{ fontSize:11 }}>{TYPE_ICONS[f]||""} {l}</button>
-          ))}
-        </div>
-        <div style={{ display:"flex", gap:4, marginLeft:"auto" }}>
-          {[["pending","Pending"],["approved","Approved"],["rejected","Rejected"],["all","All"]].map(([f,l])=>(
-            <button key={f} onClick={()=>setStatusFilter(f)}
-              className={"bo-btn bo-btn-sm "+(statusFilter===f?"bo-btn-primary":"bo-btn-ghost")}>{l}</button>
-          ))}
-        </div>
+      {/* Type filter — secondary refinement, visually lighter than the status tabs above */}
+      <div style={{ display:"flex", gap:4, marginBottom:16, flexWrap:"wrap" }}>
+        {[["all","All Types"],["opname","Stock Count"],["waste","Waste"],["consumption","Staff Meal"],["production","Production"],["requisition","Request"]].map(([f,l])=>(
+          <button key={f} onClick={()=>setTypeFilter(f)}
+            className="bo-btn bo-btn-sm bo-btn-ghost"
+            style={{ fontSize:11, opacity: typeFilter===f?1:0.6, fontWeight: typeFilter===f?700:500 }}>{TYPE_ICONS[f]||""} {l}</button>
+        ))}
       </div>
 
       {/* Bulk selection bar */}
@@ -855,7 +864,13 @@ export default function StaffSubmissions() {
                   </tr>
                 )
               })}
-              {filtered.length===0 && <tr><td colSpan={8} style={{ textAlign:"center", color:"var(--ink5)", padding:"32px 0" }}>No submissions found</td></tr>}
+              {filtered.length===0 && (
+                <tr><td colSpan={8} style={{ textAlign:"center", color:"var(--ink5)", padding:"32px 0" }}>
+                  {statusFilter==="pending"
+                    ? <span>✓ All caught up — no pending reports</span>
+                    : "No submissions found"}
+                </td></tr>
+              )}
             </tbody>
           </table>
         )}

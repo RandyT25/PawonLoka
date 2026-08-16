@@ -314,8 +314,10 @@ function BackofficeLogin({ onAuth }) {
   function press(val) {
     if (val === "del") { setPin(p => p.slice(0,-1)); setError(""); return }
     if (val === "ok") { if (pin.length >= 4) check(pin); return }
-    if (pin.length >= 8) return
-    setPin(p => p + val)
+    if (pin.length >= 4) return
+    const next = pin + val
+    setPin(next)
+    if (next.length === 4) check(next)
   }
 
   async function check(code) {
@@ -344,7 +346,7 @@ function BackofficeLogin({ onAuth }) {
         <div className="bo-login-logo">PawonLoka</div>
         <div className="bo-login-sub">Back Office · Masukkan PIN Anda</div>
         <div className="bo-pin-dots">
-          {Array.from({length:Math.max(pin.length, 4)},(_,i)=>(
+          {Array.from({length:4},(_,i)=>(
             <div key={i} className={"bo-pin-dot"+(i<pin.length?" filled":"")} />
           ))}
         </div>
