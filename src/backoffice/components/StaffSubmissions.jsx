@@ -58,9 +58,10 @@ export default function StaffSubmissions() {
   const [selected,    setSelected]    = useState(new Set())
   const [confirmState, setConfirmState] = useState(null) // {message, resolve}
   const [orphanApprovedIds, setOrphanApprovedIds] = useState(new Set()) // approved sub IDs missing their expected stock_movements
-  const [dismissedOrphanIds, setDismissedOrphanIds] = useState(() => {
-    try { return new Set(JSON.parse(localStorage.getItem("ss_dismissed_orphans")||"[]")) } catch { return new Set() }
-  })
+  // Acknowledged orphans — stored server-side as data._orphanAck on the submission itself
+  // (not localStorage), so dismissing shows the same on every device/browser instead of
+  // only the one that clicked it.
+  const [dismissedOrphanIds, setDismissedOrphanIds] = useState(new Set())
   const audioRef = useRef(null)
   const channelRef = useRef(null)
 
@@ -116,6 +117,7 @@ export default function StaffSubmissions() {
       const { data:s } = subRes, { data:i } = ingRes, { data:sr } = srRes, { data:sri } = sriRes, { data:sup } = supRes
       setSubmissions(s||[]); setIngredients(i||[]); setSubRecipes(sr||[]); setSubRecipeIngs(sri||[]); setSuppliers(sup||[])
       setNewCount(0)
+      setDismissedOrphanIds(new Set((s||[]).filter(sub => sub.data?._orphanAck).map(sub => sub.id)))
       checkOrphanedApprovals(s||[]) // non-blocking; fills in the "not applied" badges once ready
     } catch (e) {
       // A rejected Promise.all (network/fetch failure) used to skip every line below it —
@@ -162,21 +164,155 @@ export default function StaffSubmissions() {
     return sub?.status === "approved" && orphanApprovedIds.has(sub.id)
   }
 
-  function dismissOrphan(id) {
-    setDismissedOrphanIds(prev => {
-      const next = new Set(prev); next.add(id)
-      localStorage.setItem("ss_dismissed_orphans", JSON.stringify([...next]))
-      return next
-    })
+  async function dismissOrphan(id) {
+    const sub = submissions.find(s => s.id === id)
+    if (!sub) return
+    const nextData = { ...(sub.data||{}), _orphanAck: true }
+    const { error } = await supabase.from("staff_submissions").update({ data: nextData }).eq("id", id)
+    if (error) { alert("Gagal menyimpan acknowledge: " + error.message); return }
+    setSubmissions(prev => prev.map(s => s.id === id ? { ...s, data: nextData } : s))
+    setDismissedOrphanIds(prev => new Set(prev).add(id))
   }
 
-  function dismissAllOrphans() {
+  async function dismissAllOrphans() {
+    const idsToAck = [...orphanApprovedIds].filter(id => !dismissedOrphanIds.has(id))
+    if (!idsToAck.length) return
+    const results = await Promise.all(idsToAck.map(async id => {
+      const sub = submissions.find(s => s.id === id)
+      if (!sub) return null
+      const nextData = { ...(sub.data||{}), _orphanAck: true }
+      const { error } = await supabase.from("staff_submissions").update({ data: nextData }).eq("id", id)
+      return error ? null : { id, nextData }
+    }))
+    const succeeded = results.filter(Boolean)
+    setSubmissions(prev => prev.map(s => {
+      const hit = succeeded.find(r => r.id === s.id)
+      return hit ? { ...s, data: hit.nextData } : s
+    }))
     setDismissedOrphanIds(prev => {
       const next = new Set(prev)
-      for (const id of orphanApprovedIds) next.add(id)
-      localStorage.setItem("ss_dismissed_orphans", JSON.stringify([...next]))
+      for (const r of succeeded) next.add(r.id)
       return next
     })
+    const failedCount = idsToAck.length - succeeded.length
+    if (failedCount > 0) alert(failedCount + " gagal di-acknowledge, coba lagi.")
+  }
+
+  // Re-applies an orphaned (approved-but-never-written) submission's stock effect, using
+  // the exact same live-stock-diff logic approveOne() uses — fresh-fetch current stock,
+  // then add the originally-recorded diff on top, so a retry weeks later still doesn't
+  // erase any sales/production that happened in between. Only "opname" gets the extra
+  // guard: if some OTHER Adjustment already landed on the same ingredient after this
+  // submission was taken, applying the old diff again on top would double-count it, so
+  // that ingredient line is skipped and reported instead of silently applied.
+  async function retryOrphan(sub) {
+    if (!EXPECTED_MOVEMENT_TYPE[sub.type]) return
+    setProcessing(true)
+    try {
+      const nowTime = () => new Date().toLocaleTimeString("id-ID",{hour:"2-digit",minute:"2-digit"})
+      const movId = () => "MOV-"+Date.now()+"-"+Math.random().toString(36).slice(2,6)
+
+      if (sub.type === "opname") {
+        const items = sub.data.items || []
+        const countDate = sub.data.date || (sub.submitted_at||new Date().toISOString()).slice(0,10)
+        const skipped = []
+        const applied = []
+        for (const item of items) {
+          const { data:laterAdj } = await supabase.from("stock_movements")
+            .select("id").eq("ingredient_id", item.ingredient_id).eq("type","Adjustment")
+            .gt("created_at", sub.submitted_at).limit(1)
+          if (laterAdj && laterAdj.length) { skipped.push(item.name); continue }
+          const { data:freshIng } = await supabase.from("ingredients").select("stock").eq("id",item.ingredient_id).maybeSingle()
+          const newStock = Math.max(0, (freshIng?.stock ?? item.system_qty ?? 0) + item.diff)
+          const { error:updErr } = await supabase.from("ingredients").update({ stock:newStock }).eq("id",item.ingredient_id)
+          if (updErr) throw updErr
+          const { error:movErr } = await supabase.from("stock_movements").insert({
+            id: movId(), type:"Adjustment", ingredient_id:item.ingredient_id, ingredient_name:item.name,
+            qty:item.diff, unit:item.unit, ref:sub.id,
+            note:"Retry (orphan backfill) — staff opname by "+sub.submitted_by,
+            date:countDate, time:nowTime(),
+          })
+          if (movErr) throw movErr
+          applied.push(item.name)
+        }
+        if (skipped.length) alert("Diterapkan: "+applied.length+" item.\nDilewati (sudah ada Adjustment lain setelahnya): "+skipped.join(", "))
+      } else if (sub.type === "production") {
+        const d = sub.data
+        const outputIngredientId = d.item_id || subRecipes.find(sr=>sr.id===d.sub_recipe_id)?.ingredient_id
+        const item = outputIngredientId ? ingredients.find(i=>i.id===outputIngredientId) : null
+        const producedQty = d.actual_yield ?? d.batch_qty
+        const producedDate = d.date || (sub.submitted_at||new Date().toISOString()).slice(0,10)
+        for (const u of d.ingredients_used||[]) {
+          const ing = ingredients.find(i=>i.id===u.ingredient_id)
+          if (!ing) continue
+          const qtyBase = toBaseUnit(ing, u.qty||0, u.unit)
+          const { data:freshIng } = await supabase.from("ingredients").select("stock").eq("id",ing.id).maybeSingle()
+          const newStock = Math.max(0, (freshIng?.stock ?? ing.stock ?? 0) - qtyBase)
+          const { error:stockErr } = await supabase.from("ingredients").update({ stock:newStock }).eq("id",ing.id)
+          if (stockErr) throw stockErr
+          const { error:movErr } = await supabase.from("stock_movements").insert({
+            id: movId(), type:"Production", ingredient_id:ing.id, ingredient_name:ing.name,
+            qty:-qtyBase, unit:ing.unit, ref:sub.id,
+            note:"Retry (orphan backfill) — production: "+d.item_name+" by "+sub.submitted_by,
+            date:producedDate, time:nowTime(),
+          })
+          if (movErr) throw movErr
+        }
+        if (item) {
+          const producedQtyBase = toBaseUnit(item, producedQty||0, d.yield_unit||d.unit||item.unit)
+          const { data:freshItem } = await supabase.from("ingredients").select("stock").eq("id",item.id).maybeSingle()
+          const newItemStock = (freshItem?.stock ?? item.stock ?? 0) + producedQtyBase
+          const { error:itemErr } = await supabase.from("ingredients").update({ stock:newItemStock }).eq("id",item.id)
+          if (itemErr) throw itemErr
+          const { error:movErr2 } = await supabase.from("stock_movements").insert({
+            id: movId(), type:"Production", ingredient_id:item.id, ingredient_name:item.name,
+            qty:producedQtyBase, unit:item.unit, ref:sub.id,
+            note:"Retry (orphan backfill) — production output: "+d.item_name+" by "+sub.submitted_by,
+            date:producedDate, time:nowTime(),
+          })
+          if (movErr2) throw movErr2
+        }
+      } else if (sub.type === "waste") {
+        const d = sub.data
+        const ing = ingredients.find(i=>i.id===d.ingredient_id)
+        const wasteDate = d.date || (sub.submitted_at||new Date().toISOString()).slice(0,10)
+        if (ing) {
+          const { data:freshIng } = await supabase.from("ingredients").select("stock").eq("id",ing.id).maybeSingle()
+          const newStock = Math.max(0, (freshIng?.stock ?? ing.stock ?? 0) - d.qty)
+          const { error:stockErr } = await supabase.from("ingredients").update({ stock:newStock }).eq("id",ing.id)
+          if (stockErr) throw stockErr
+          await supabase.from("stock_movements").insert({
+            id: movId(), type:"Waste", ingredient_id:d.ingredient_id, ingredient_name:d.ingredient_name,
+            qty:-d.qty, unit:d.unit, ref:sub.id,
+            note:"Retry (orphan backfill) — waste by "+sub.submitted_by+": "+d.reason,
+            date:wasteDate, time:nowTime(),
+          })
+        }
+      } else if (sub.type === "consumption") {
+        const d = sub.data
+        const ing = ingredients.find(i=>i.id===d.ingredient_id)
+        const consumedDate = d.date || (sub.submitted_at||new Date().toISOString()).slice(0,10)
+        if (ing) {
+          const { data:freshIng } = await supabase.from("ingredients").select("stock").eq("id",ing.id).maybeSingle()
+          const newStock = Math.max(0, (freshIng?.stock ?? ing.stock ?? 0) - d.qty)
+          const { error:stockErr } = await supabase.from("ingredients").update({ stock:newStock }).eq("id",ing.id)
+          if (stockErr) throw stockErr
+          await supabase.from("stock_movements").insert({
+            id: movId(), type:"Staff Meal", ingredient_id:d.ingredient_id, ingredient_name:d.ingredient_name,
+            qty:-d.qty, unit:d.unit, ref:sub.id,
+            note:"Retry (orphan backfill) — staff meal by "+sub.submitted_by,
+            date:consumedDate, time:nowTime(),
+          })
+        }
+      }
+      // A movement of the expected type now exists for this ref — re-mark acknowledged
+      // and let the next orphan check drop it from the flagged set entirely.
+      await dismissOrphan(sub.id)
+      await load()
+    } catch (e) {
+      alert("Retry gagal: " + (e.message || e))
+    }
+    setProcessing(false)
   }
 
   const byStatus = (st) => submissions.filter(s => s.status === st)
@@ -708,6 +844,9 @@ export default function StaffSubmissions() {
                           <button onClick={()=>approve(s)} disabled={processing} className="bo-btn bo-btn-sm" style={{ background:"var(--green-lt)", color:"var(--green)", border:"none", cursor:"pointer", borderRadius:"var(--r)", padding:"5px 11px", fontSize:12, fontWeight:600 }}>Approve</button>
                           <button onClick={()=>reject(s)} disabled={processing} className="bo-btn bo-btn-danger bo-btn-sm">Reject</button>
                         </>}
+                        {isOrphanApproved(s) && !dismissedOrphanIds.has(s.id) && (
+                          <button onClick={()=>retryOrphan(s)} disabled={processing} className="bo-btn bo-btn-sm" style={{ background:"var(--red-lt)", color:"var(--red)", border:"none" }} title="Re-apply this submission's stock effect using current live stock as the baseline">Retry</button>
+                        )}
                         <button onClick={()=>deleteSubmission(s)} className="bo-btn bo-btn-ghost bo-btn-sm" style={{ color:"var(--red)" }}>Delete</button>
                       </div>
                     </td>
@@ -736,11 +875,15 @@ export default function StaffSubmissions() {
                 <div style={{ fontWeight:700, color:"var(--red)", fontSize:13 }}>⚠ Approved but not applied to stock</div>
                 <div style={{ fontSize:12, color:"var(--ink4)", marginTop:4 }}>
                   No "{EXPECTED_MOVEMENT_TYPE[viewModal.type]}" stock_movements record references this submission. It was likely marked approved
-                  without going through the normal apply-to-stock flow (e.g. a manual database edit). Re-applying automatically is not safe this
-                  long after the fact — if correction is needed, do a fresh count/entry instead.
+                  without going through the normal apply-to-stock flow (e.g. a manual database edit). Retry re-applies it using current live
+                  stock as the baseline (same delayed-approval-safe math as a normal approval) — for opname, any ingredient that already got a
+                  separate Adjustment since this was submitted is skipped automatically rather than risking a double-count.
                 </div>
                 {!dismissedOrphanIds.has(viewModal.id) && (
-                  <button onClick={()=>dismissOrphan(viewModal.id)} className="bo-btn bo-btn-sm bo-btn-ghost" style={{ marginTop:8 }}>Acknowledge</button>
+                  <div style={{ display:"flex", gap:8, marginTop:8 }}>
+                    <button onClick={()=>retryOrphan(viewModal)} disabled={processing} className="bo-btn bo-btn-sm" style={{ background:"var(--red-lt)", color:"var(--red)", border:"none" }}>Retry</button>
+                    <button onClick={()=>dismissOrphan(viewModal.id)} className="bo-btn bo-btn-sm bo-btn-ghost">Acknowledge (skip, don't retry)</button>
+                  </div>
                 )}
               </div>
             )}

@@ -29,10 +29,14 @@ const EXPENSE_CATEGORIES = [
 // "supply" categories are listed — any category not listed here (every real food/
 // ingredient category, or an ingredient that's missing/deleted) falls through to
 // "bahan_baku", the existing raw-ingredient bucket.
+// "Packaging" is deliberately left out of this map — it can now be attached to a recipe
+// (RecipeEditor's IngSearch) and flow through products.cogs -> orders.cogs at time of
+// sale, same as raw ingredients. Leaving it mapped to an opex bucket here would double-count
+// it (once as opex at purchase time, again as COGS at sale time) — so it falls through to
+// the "bahan_baku" default below, which nonFoodPOTotal already excludes for that exact reason.
 const SUPPLY_CATEGORY_TO_EXPENSE_CAT = {
   "Kitchen Tools & Utensils": "kitchen",
   "Charcoal":                 "kitchen",
-  "Packaging":                "kitchen",
   "Disposables":              "kitchen",
   "Cleaning & Sanitation":    "floor_cleaning",
   "Trash & Vacuum Bags":      "floor_cleaning",

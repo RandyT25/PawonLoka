@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from "react"
 import { supabase } from "../../lib/supabase"
-import { isFoodCategory } from "../lib/ingredientCategories"
+import { isFoodCategory, isSupplyCategory } from "../lib/ingredientCategories"
 import { unitPriceFor } from "../../shared/unitConversion"
 
 const UNIT_TO_BASE = {
@@ -29,6 +29,10 @@ function IngSearch({ value, onChange, ingredients, subRecipes, showSubs = true }
     // resolution below. Using s.id here made this component unable to resolve/display any
     // existing line referencing a sub-recipe nested inside another sub-recipe.
     ...(showSubs ? subRecipes.map(s => ({ ...s, id: s.ingredient_id, _g:"Sub" })) : []),
+    // Supplies (packaging, disposables, etc.) — some recipes need to cost in a takeaway
+    // box/bag alongside the food ingredients. Costing itself is already category-agnostic
+    // (keyed purely by ingredient_id), this was the only place blocking selection.
+    ...ingredients.filter(i => isSupplyCategory(i.category)).map(i => ({ ...i, _g:"Supply" })),
   ]
   const filtered = q ? all.filter(x => x.name.toLowerCase().includes(q.toLowerCase())) : all
   const sel = all.find(x => x.id === value)
@@ -82,11 +86,12 @@ function IngSearch({ value, onChange, ingredients, subRecipes, showSubs = true }
                   onMouseEnter={()=>setCursor(i)}
                   style={{ padding:"8px 12px", fontSize:13, cursor:"pointer",
                     background: i===cursor ? "var(--brand-lt,#eff6ff)" : o.id===value ? "#f0fdf4" : "transparent",
-                    color: o._g==="Sub" ? "#7c3aed" : "var(--ink)",
+                    color: o._g==="Sub" ? "#7c3aed" : o._g==="Supply" ? "#0891b2" : "var(--ink)",
                     fontWeight: o.id===value ? 700 : 400,
                     borderLeft: i===cursor ? "3px solid var(--brand,#2563eb)" : "3px solid transparent" }}>
                   {o.name}
                   {o._g==="Sub" && <span style={{ fontSize:10, color:"#7c3aed", marginLeft:4 }}>(sub)</span>}
+                  {o._g==="Supply" && <span style={{ fontSize:10, color:"#0891b2", marginLeft:4 }}>(supply)</span>}
                   {(o.cost_per_unit||o.market_cost)>0 && <span style={{ fontSize:10, color:o.cost_per_unit>0?"var(--ink4)":"#92400e", marginLeft:6 }}>Rp {Math.round(o.cost_per_unit||o.market_cost).toLocaleString("id-ID")}/{o.unit}{o.cost_per_unit===0&&o.market_cost>0?" (est.)":""}</span>}
                 </div>
               ))

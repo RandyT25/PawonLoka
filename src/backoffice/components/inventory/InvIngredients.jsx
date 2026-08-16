@@ -37,7 +37,17 @@ export default function InvIngredients({ mode="ingredients" }) {
   const [sortDir, setSortDir] = useState("asc")
   const [quickEdit, setQuickEdit] = useState(null) // {id, field}
   const [quickVal,  setQuickVal]  = useState("")
-  const categoryOptions = isSupplies ? supplyCatsList : foodCatsList
+  // Ingredients tab also offers Supply categories (grouped, so it's clear which is which) —
+  // otherwise anyone adding a cleaning/packaging item from this tab has no correct option
+  // and lands on the food-only default, which is how items ended up miscategorized before.
+  const categoryOptions = isSupplies ? supplyCatsList : [...foodCatsList, ...supplyCatsList]
+  function CategoryOptions() {
+    if (isSupplies) return supplyCatsList.map(c=><option key={c}>{c}</option>)
+    return <>
+      <optgroup label="Food">{foodCatsList.map(c=><option key={c}>{c}</option>)}</optgroup>
+      <optgroup label="Supplies">{supplyCatsList.map(c=><option key={c}>{c}</option>)}</optgroup>
+    </>
+  }
 
   useEffect(() => { load() }, [])
 
@@ -372,7 +382,7 @@ export default function InvIngredients({ mode="ingredients" }) {
                     const category = e.target.value
                     setForm(f=>({ ...f, category, track_stock: trackStockTouched ? f.track_stock : isFoodCategory(category) }))
                   }} className="bo-select">
-                    {categoryOptions.map(c=><option key={c}>{c}</option>)}
+                    <CategoryOptions/>
                   </select>
                 </div>
 
@@ -501,7 +511,7 @@ export default function InvIngredients({ mode="ingredients" }) {
                     {unitsList.map(u=><option key={u}>{u}</option>)}
                   </select>
                   <select value={r.category} onChange={e=>updateBulkRow(i,"category",e.target.value)} className="bo-select" style={{ fontSize:12 }}>
-                    {categoryOptions.map(c=><option key={c}>{c}</option>)}
+                    <CategoryOptions/>
                   </select>
                   <input type="number" value={r.stock} onChange={e=>updateBulkRow(i,"stock",e.target.value)} className="bo-input" style={{ fontSize:12 }} placeholder="0" />
                   <input type="number" value={r.cost_per_unit} onChange={e=>updateBulkRow(i,"cost_per_unit",e.target.value)} className="bo-input" style={{ fontSize:12 }} placeholder="0" />

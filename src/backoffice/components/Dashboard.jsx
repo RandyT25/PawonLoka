@@ -62,10 +62,21 @@ export default function Dashboard({ onNavChange }) {
     const maxHour = Math.max(...Object.values(hMap), 1)
     const hourArr = Object.entries(hMap).map(([h, v]) => ({ hour: h + ":00", value: v, maxHour }))
 
-    // Month projection (only meaningful for "today" range)
-    const day  = new Date().getDate()
-    const days = new Date(new Date().getFullYear(), new Date().getMonth() + 1, 0).getDate()
-    const proj = day > 0 ? Math.round(totalSales / day * days) : 0
+    // Month projection — always real current-month-to-date, independent of the selected
+    // range/date. Previously used totalSales (scoped to whatever range is selected) divided
+    // by today's real day-of-month, which produced a nonsensical number whenever a custom
+    // date other than today was selected.
+    const now2   = new Date()
+    const mStart = `${now2.getFullYear()}-${String(now2.getMonth()+1).padStart(2,"0")}-01`
+    const todayS = now2.toISOString().slice(0,10)
+    let mtd = 0
+    try {
+      const { data: mtdR } = await supabase.from("orders").select("total").eq("status","Paid").gte("date", mStart).lte("date", todayS)
+      mtd = (mtdR||[]).reduce((s,o)=>s+(o.total||0),0)
+    } catch(e) {}
+    const day  = now2.getDate()
+    const days = new Date(now2.getFullYear(), now2.getMonth() + 1, 0).getDate()
+    const proj = day > 0 ? Math.round(mtd / day * days) : 0
 
     // Payment method breakdown
     const pm = {}
