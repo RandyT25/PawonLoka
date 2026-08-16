@@ -130,26 +130,28 @@ export default function StaffSubmissions() {
 
   // Detects approved submissions whose data never actually reached ingredients.stock —
   // i.e. status:"approved" with no corresponding stock_movements row of the expected
-  // type. Runs as a single batched (chunked) query, not one query per submission, so it
-  // stays cheap regardless of how many submissions are loaded. Does NOT reconcile exact
-  // quantities (e.g. per-line diff matching) — presence of at least one movement of the
-  // right type is enough to catch the true-orphan case (the dangerous one); tighter
+  // type. Fetches every stock_movements row whose ref looks like a submission id (all
+  // submission ids are "SS-<timestamp>") via a single LIKE query, paginated with .range()
+  // — not chunked .in() with hundreds of ids per call, which was silently truncating on
+  // some batches (a too-long query URL failing without visibly breaking the page) and
+  // making healthy submissions show up as false-positive orphans. Does NOT reconcile
+  // exact quantities (e.g. per-line diff matching) — presence of at least one movement of
+  // the right type is enough to catch the true-orphan case (the dangerous one); tighter
   // reconciliation is deliberately left out as lower-value/higher-complexity.
   async function checkOrphanedApprovals(subs) {
     const candidates = subs.filter(s => s.status === "approved" && EXPECTED_MOVEMENT_TYPE[s.type])
     if (!candidates.length) { setOrphanApprovedIds(new Set()); return }
 
-    const ids = candidates.map(s => s.id)
     const typesByRef = new Map() // submission id -> Set of stock_movements.type seen for it
-    const CHUNK = 200 // keep .in() query strings well under URL/param limits
-    for (let i = 0; i < ids.length; i += CHUNK) {
-      const chunk = ids.slice(i, i + CHUNK)
-      const { data, error } = await supabase.from("stock_movements").select("ref,type").in("ref", chunk)
-      if (error) { console.error("Orphan-approval check failed, skipping this batch:", error); continue }
+    const PAGE = 1000
+    for (let from = 0; ; from += PAGE) {
+      const { data, error } = await supabase.from("stock_movements").select("ref,type").like("ref", "SS-%").range(from, from + PAGE - 1)
+      if (error) { console.error("Orphan-approval check failed:", error); break }
       for (const row of data || []) {
         if (!typesByRef.has(row.ref)) typesByRef.set(row.ref, new Set())
         typesByRef.get(row.ref).add(row.type)
       }
+      if (!data || data.length < PAGE) break
     }
 
     const orphans = new Set()
