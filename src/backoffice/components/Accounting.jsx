@@ -161,7 +161,11 @@ export default function Accounting() {
     setLoading(true)
     const [y,m] = period.split("-")
     const from = `${y}-${m}-01`
-    const to   = new Date(parseInt(y), parseInt(m), 0).toISOString().slice(0,10)
+    // Never route the last-day-of-month calc through toISOString() — it converts to
+    // UTC and rolls the date back by one for any timezone ahead of UTC (e.g. WIB/WITA),
+    // which silently excluded the last day of every month from every query below.
+    const lastDay = new Date(parseInt(y), parseInt(m), 0)
+    const to = `${lastDay.getFullYear()}-${String(lastDay.getMonth()+1).padStart(2,"0")}-${String(lastDay.getDate()).padStart(2,"0")}`
 
     const [ordRes, expRes, poRes, staffRes, kbRes, obRes, ingRes, wasteRes, consumeRes, opnameRes] = await Promise.all([
       supabase.from("orders").select("*").eq("status","Paid").gte("created_at",from+"T00:00:00+08:00").lte("created_at",to+"T23:59:59+08:00"),
