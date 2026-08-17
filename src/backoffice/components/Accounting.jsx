@@ -357,11 +357,36 @@ export default function Accounting() {
   function expLineCategories(e) {
     const lines = e.lines?.length ? e.lines : [{ coa_name:e.cat, description:e.description, amount:e.amount }]
     return lines.map(l => ({
-      catId: COA_NAME_TO_EXPENSE_CAT[l.coa_name] || (EXPENSE_CATEGORIES.some(c=>c.id===l.coa_name) ? l.coa_name : "lain"),
+      // No generic "Lain-lain" catch-all — an account with no dedicated P&L bucket shows
+      // under its own real name instead of being silently merged with every other
+      // unmapped account (previously: Biaya Bensin & Parkir + Ice Cream + Sumbangan +
+      // Lalamove all vanished into one indistinguishable "Lain-lain" total).
+      catId: COA_NAME_TO_EXPENSE_CAT[l.coa_name] || l.coa_name || "lain",
       amount: parseFloat(l.amount)||0,
       description: l.description,
       coa_name: l.coa_name,
     }))
+  }
+
+  // Every akun (Chart of Accounts) with a nonzero amount this period gets its own Laba
+  // Rugi row, by its real name — no fixed always-shown list (Bar Supplies/Marketing/Kas
+  // Bon etc. used to render at Rp 0 even when nothing was ever entered against them),
+  // and no account silently absorbed into a generic bucket. Auto-only structural rows
+  // (Gaji/Staff Meal/Waste/Selisih Stok Opname) and Bahan Baku are handled separately.
+  function nonAutoBreakdownRows() {
+    const AUTO_IDS = ["gaji","staff_meal","waste","stock_variance","bahan_baku"]
+    const catIds = []
+    Object.keys(poByCategory).forEach(id => { if (!AUTO_IDS.includes(id) && !catIds.includes(id)) catIds.push(id) })
+    manualExpenses.forEach(e => expLineCategories(e).forEach(l => {
+      if (!AUTO_IDS.includes(l.catId) && !catIds.includes(l.catId)) catIds.push(l.catId)
+    }))
+    return catIds
+      .map(catId => {
+        const known = EXPENSE_CATEGORIES.find(c=>c.id===catId)
+        return { catId, label: known?.label || catId, icon: known?.icon || "📦", amount: catTotal(catId) }
+      })
+      .filter(r => r.amount > 0)
+      .sort((a,b) => b.amount - a.amount)
   }
 
   // Expenses by category for display
@@ -524,7 +549,7 @@ export default function Accounting() {
       ["Staff Meal", fmt(staffMealDisplay)],
       ["Waste", fmt(wasteDisplay)],
       ["Selisih Stok Opname", fmt(stockVarianceDisplay)],
-      ...EXPENSE_CATEGORIES.filter(c=>!c.auto).map(c=>[c.label, fmt(catTotal(c.id))]),
+      ...nonAutoBreakdownRows().map(r=>[r.label, fmt(r.amount)]),
       ["Total Beban", fmt(totalOpex)],
       ["Laba Bersih", fmt(netProfit) + " (" + netMargin + "%)"],
     ]
@@ -568,7 +593,7 @@ export default function Accounting() {
             ["Staff Meal", staffMealDisplay],
             ["Waste", wasteDisplay],
             ["Selisih Stok Opname", stockVarianceDisplay],
-            ...EXPENSE_CATEGORIES.filter(c=>!c.auto).map(c=>[c.label, catTotal(c.id)]),
+            ...nonAutoBreakdownRows().map(r=>[r.label, r.amount]),
             ["Total Beban", totalOpex],
             ["Laba Bersih", netProfit],
             ["Net Margin", netMargin+"%"],
@@ -713,7 +738,7 @@ export default function Accounting() {
                 ["🍱 Staff Meal",staffMealDisplay],
                 ["🗑️ Waste",wasteDisplay],
                 ["📉 Selisih Stok Opname",stockVarianceDisplay],
-                ...EXPENSE_CATEGORIES.filter(c=>!c.auto).map(c=>[c.icon+" "+c.label,catTotal(c.id)]),
+                ...nonAutoBreakdownRows().map(r=>[r.icon+" "+r.label, r.amount]),
               ].filter(([,v])=>v>0).map(([l,v])=>(
                 <div key={l} style={{ marginBottom:10 }}>
                   <div style={{ display:"flex",justifyContent:"space-between",fontSize:13,marginBottom:3 }}>
@@ -778,7 +803,7 @@ export default function Accounting() {
               ["Staff Meal",staffMealDisplay],
               ["Waste",wasteDisplay],
               ["Selisih Stok Opname",stockVarianceDisplay],
-              ...EXPENSE_CATEGORIES.filter(c=>!c.auto).map(c=>[c.label,catTotal(c.id)]),
+              ...nonAutoBreakdownRows().map(r=>[r.label, r.amount]),
               ["Total Beban",totalOpex],
             ].map(([l,v])=>(
               <div key={l} style={{ display:"flex",justifyContent:"space-between",padding:"6px 0",fontSize:13,borderBottom:"1px solid var(--surface2)",fontWeight:l==="Total Beban"?800:400 }}>
@@ -1593,7 +1618,7 @@ export default function Accounting() {
                     {(expDetailModal.lines||[{coa_name:expDetailModal.cat,description:expDetailModal.description,amount:expDetailModal.amount}]).map((l,i)=>(
                       <tr key={i} style={{ borderBottom:"1px solid #F0F4F8" }}>
                         <td style={{ padding:"9px 12px", fontSize:13 }}>{l.coa_name||l.coa_id||"—"}</td>
-                        <td style={{ padding:"9px 12px", fontSize:12, color:"var(--ink4)" }}>{l.description||"—"}</td>
+                        <td style={{ padding:"9px 12px", fontSize:12, color:"var(--ink4)" }}>{l.description}</td>
                         <td style={{ padding:"9px 12px", fontSize:13, fontWeight:700 }}>Rp {Number(l.amount||0).toLocaleString("id-ID")}</td>
                       </tr>
                     ))}
