@@ -351,6 +351,20 @@ export default function Accounting() {
     return manual + (poByCategory[catId]||0)
   }
 
+  // salaryTotal/staffMealTotal/wasteTotal/stockVarianceTotal are "auto" totals (Staff table,
+  // staff_consumption, waste_records, stock_opname) and totalOpex already counts them plus
+  // manualTotal (which unconditionally sums every manual line regardless of category) — so
+  // these totals themselves must stay untouched, or a manual entry tagged e.g. "Staff Meal"
+  // would get added twice. But every display below this point that shows "Staff Meal"/"Gaji"/
+  // "Waste"/"Selisih Stok Opname" as its OWN row was reading only the auto total, silently
+  // hiding any manual entry tagged into one of those categories (confirmed live: a Rp
+  // 1,400,000 manual "Staff Meal" entry counted correctly in Total Beban but showed as
+  // Rp 0 in its own row). These *Display variants are for those rows only — never for totalOpex.
+  const salaryDisplay        = salaryTotal + catTotal("gaji")
+  const staffMealDisplay     = staffMealTotal + catTotal("staff_meal")
+  const wasteDisplay         = wasteTotal + catTotal("waste")
+  const stockVarianceDisplay = stockVarianceTotal + catTotal("stock_variance")
+
   async function loadExpCoa() {
     const { data } = await supabase.from("chart_of_accounts")
       .select("*").eq("is_active", true)
@@ -486,10 +500,10 @@ export default function Accounting() {
       ["HPP / COGS", fmt(totalCOGS)],
       ["Laba Kotor", fmt(grossProfit) + " (" + grossMargin + "%)"],
       ["Bahan Baku (PO) — info, sudah di COGS", fmt(bahanBakuPO)],
-      ["Gaji Karyawan", fmt(salaryTotal)],
-      ["Staff Meal", fmt(staffMealTotal)],
-      ["Waste", fmt(wasteTotal)],
-      ["Selisih Stok Opname", fmt(stockVarianceTotal)],
+      ["Gaji Karyawan", fmt(salaryDisplay)],
+      ["Staff Meal", fmt(staffMealDisplay)],
+      ["Waste", fmt(wasteDisplay)],
+      ["Selisih Stok Opname", fmt(stockVarianceDisplay)],
       ...EXPENSE_CATEGORIES.filter(c=>!c.auto).map(c=>[c.label, fmt(catTotal(c.id))]),
       ["Total Beban", fmt(totalOpex)],
       ["Laba Bersih", fmt(netProfit) + " (" + netMargin + "%)"],
@@ -530,10 +544,10 @@ export default function Accounting() {
             ["COGS", totalCOGS],
             ["Laba Kotor", grossProfit],
             ["Bahan Baku (PO) — info, sudah di COGS", bahanBakuPO],
-            ["Gaji Karyawan", salaryTotal],
-            ["Staff Meal", staffMealTotal],
-            ["Waste", wasteTotal],
-            ["Selisih Stok Opname", stockVarianceTotal],
+            ["Gaji Karyawan", salaryDisplay],
+            ["Staff Meal", staffMealDisplay],
+            ["Waste", wasteDisplay],
+            ["Selisih Stok Opname", stockVarianceDisplay],
             ...EXPENSE_CATEGORIES.filter(c=>!c.auto).map(c=>[c.label, catTotal(c.id)]),
             ["Total Beban", totalOpex],
             ["Laba Bersih", netProfit],
@@ -675,10 +689,10 @@ export default function Accounting() {
                 </div>
               )}
               {[
-                ["👥 Gaji Karyawan",salaryTotal],
-                ["🍱 Staff Meal",staffMealTotal],
-                ["🗑️ Waste",wasteTotal],
-                ["📉 Selisih Stok Opname",stockVarianceTotal],
+                ["👥 Gaji Karyawan",salaryDisplay],
+                ["🍱 Staff Meal",staffMealDisplay],
+                ["🗑️ Waste",wasteDisplay],
+                ["📉 Selisih Stok Opname",stockVarianceDisplay],
                 ...EXPENSE_CATEGORIES.filter(c=>!c.auto).map(c=>[c.icon+" "+c.label,catTotal(c.id)]),
               ].filter(([,v])=>v>0).map(([l,v])=>(
                 <div key={l} style={{ marginBottom:10 }}>
@@ -740,10 +754,10 @@ export default function Accounting() {
           <div style={{ marginBottom:16 }}>
             <div style={{ fontSize:11,fontWeight:800,color:"#FF8B00",textTransform:"uppercase",letterSpacing:"0.5px",marginBottom:8,paddingBottom:4,borderBottom:"2px solid #FF8B00" }}>BEBAN OPERASIONAL</div>
             {[
-              ["Gaji Karyawan",salaryTotal],
-              ["Staff Meal",staffMealTotal],
-              ["Waste",wasteTotal],
-              ["Selisih Stok Opname",stockVarianceTotal],
+              ["Gaji Karyawan",salaryDisplay],
+              ["Staff Meal",staffMealDisplay],
+              ["Waste",wasteDisplay],
+              ["Selisih Stok Opname",stockVarianceDisplay],
               ...EXPENSE_CATEGORIES.filter(c=>!c.auto).map(c=>[c.label,catTotal(c.id)]),
               ["Total Beban",totalOpex],
             ].map(([l,v])=>(
