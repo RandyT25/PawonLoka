@@ -804,8 +804,7 @@ export default function Accounting() {
               ["Waste",wasteDisplay],
               ["Selisih Stok Opname",stockVarianceDisplay],
               ...nonAutoBreakdownRows().map(r=>[r.label, r.amount]),
-              ["Total Beban",totalOpex],
-            ].map(([l,v])=>(
+            ].filter(([,v])=>v>0).concat([["Total Beban",totalOpex]]).map(([l,v])=>(
               <div key={l} style={{ display:"flex",justifyContent:"space-between",padding:"6px 0",fontSize:13,borderBottom:"1px solid var(--surface2)",fontWeight:l==="Total Beban"?800:400 }}>
                 <span style={{ paddingLeft:l==="Total Beban"?0:16 }}>{l}</span>
                 <span style={{ color:l==="Total Beban"?"#FF8B00":"#0A1628" }}>{fmt(v)}</span>
