@@ -30,6 +30,26 @@ const EXPENSE_CATEGORIES = [
   { id:"lain",            label:"Lain-lain",           icon:"📦", auto:false },
 ]
 
+// Chart of Accounts is a free-form account list (Akun tab); EXPENSE_CATEGORIES is the
+// fixed set of buckets the Laba Rugi breakdown actually totals. Manual "+ Pengeluaran"
+// entries pick a COA account, not a P&L category, so without this map every manual
+// entry's cat lands on a name (e.g. "Biaya IPL") that no P&L breakdown row matches —
+// the amount still counts in Total Beban, but its own category row shows Rp 0. Falls
+// back to "lain" for any COA account with no P&L equivalent (Biaya POS, Sumbangan, etc).
+const COA_NAME_TO_EXPENSE_CAT = {
+  "Biaya Gaji":            "gaji",
+  "Biaya Sewa":            "sewa",
+  "Biaya Listrik":         "pln",
+  "Biaya Air":             "pdam",
+  "Biaya Gas":             "gas_utilities",
+  "Biaya Internet / Wifi": "wifi",
+  "Biaya IPL":             "ipl",
+  "Kitchen Supply":        "kitchen",
+  "Cleaning Supply":       "floor_cleaning",
+  "Floor Supply":          "floor_cleaning",
+  "Staff Meal":            "staff_meal",
+}
+
 // Maps an ingredient's category (from Inventory > Ingredients/Supplies) to a P&L
 // expense-category id, so Purchase Order spending can be split by what was actually
 // bought instead of always landing in one flat "Bahan Baku" bucket. Only non-food
@@ -365,7 +385,7 @@ export default function Accounting() {
       date: expForm.date,
       time: expTime,
       akun_asal: expAkunAsal,
-      cat: expLines[0]?.coa_name || expLines[0]?.coa_id || "manual",
+      cat: COA_NAME_TO_EXPENSE_CAT[expLines[0]?.coa_name] || "lain",
       description: expForm.notes ? baseDescription + " — " + expForm.notes : baseDescription,
       amount: expLines.reduce((a,l)=>a+(parseFloat(l.amount)||0),0),
       payment_method: expForm.payment_method,
@@ -515,6 +535,22 @@ export default function Accounting() {
     const matchSearch = !expSearch||e.description?.toLowerCase().includes(expSearch.toLowerCase())
     return matchCat&&matchSearch
   })
+
+  // Auto (PO) rows and manual rows used to render as two separate, independently-unsorted
+  // blocks (POs have no .order() on their query, manual rows were sorted but appended
+  // after every PO row regardless of date) — combine + sort once so "Tanggal" is actually
+  // chronological across both sources, most recent first.
+  const combinedExpRows = useMemo(() => {
+    if (catFilter === "gaji") return []
+    const rows = []
+    pos.forEach(p => {
+      poCategoryBreakdown(p)
+        .filter(({catId}) => catFilter==="all" || catFilter===catId)
+        .forEach(({catId, amount}) => rows.push({ type:"po", date:p.date, key:p.id+"-"+catId, po:p, catId, amount }))
+    })
+    filteredExp.forEach(e => rows.push({ type:"manual", date:e.date, key:e.id, exp:e }))
+    return rows.sort((a,b) => (b.date||"").localeCompare(a.date||""))
+  }, [pos, filteredExp, catFilter])
 
   if (loading) return <div style={{ padding:40,textAlign:"center",color:"var(--ink5)" }}>Loading...</div>
 
@@ -754,26 +790,7 @@ export default function Accounting() {
             <table className="bo-table">
               <thead><tr><th>Tanggal</th><th>Kategori</th><th>Deskripsi</th><th>Metode</th><th>Jumlah</th><th></th></tr></thead>
               <tbody>
-                {/* Auto: POs — split per category (most POs are single-category, so usually one row) */}
-                {catFilter!=="gaji" && pos.flatMap(p =>
-                  poCategoryBreakdown(p)
-                    .filter(({catId}) => catFilter==="all" || catFilter===catId)
-                    .map(({catId, amount}) => {
-                      const cat = EXPENSE_CATEGORIES.find(c=>c.id===catId) || { icon:"📦", label:catId }
-                      return (
-                        <tr key={p.id+"-"+catId} onClick={()=>setPoDetailModal(p)} style={{ background:"#FFFBF0", cursor:"pointer" }}
-                          onMouseEnter={ev=>ev.currentTarget.style.background="#FFF3D6"} onMouseLeave={ev=>ev.currentTarget.style.background="#FFFBF0"}>
-                          <td style={{ fontSize:12 }}>{p.date}</td>
-                          <td><span style={{ fontSize:11,fontWeight:700,padding:"2px 8px",borderRadius:10,background:"#FFF7E6",color:"#FF8B00" }}>{cat.icon} {cat.label}</span></td>
-                          <td style={{ fontSize:12 }}>{p.supplierName||p.supplier_name} — {p.invoiceNo||p.invoice_no||"PO"}</td>
-                          <td style={{ fontSize:12,color:"#6B778C" }}>Auto</td>
-                          <td style={{ fontWeight:700 }}>{fmt(amount)}</td>
-                          <td style={{ fontSize:11,color:"#6B778C" }}>auto</td>
-                        </tr>
-                      )
-                    })
-                )}
-                {/* Manual */}
+                {/* Auto + manual, merged into one chronological list (most recent first) */}
                 {catFilter==="gaji" ? staff.map(s=>{
                     const kb = kasBonList.filter(k=>k.staff_name===s.name&&k.status==="outstanding").reduce((a,k)=>a+k.amount,0)
                     return (
@@ -786,20 +803,36 @@ export default function Accounting() {
                         <td style={{ fontSize:11,color:"#6B778C" }}>auto</td>
                       </tr>
                     )
-                  }) : filteredExp.map(e=>{
-                  const cat = EXPENSE_CATEGORIES.find(c=>c.id===e.cat)||{ icon:"📦",label:e.cat }
-                  return (
-                    <tr key={e.id} onClick={()=>openExpDetail(e)} style={{ cursor:"pointer" }} onMouseEnter={ev=>ev.currentTarget.style.background="#F8FAFC"} onMouseLeave={ev=>ev.currentTarget.style.background=""}>
-                      <td style={{ fontSize:12 }}>{e.date}</td>
-                      <td><span style={{ fontSize:11,fontWeight:700,padding:"2px 8px",borderRadius:10,background:"var(--surface)",color:"var(--ink4)" }}>{cat.icon} {cat.label}</span></td>
-                      <td style={{ fontSize:13 }}>{e.description}</td>
-                      <td style={{ fontSize:12,color:"#6B778C" }}>{e.payment_method}</td>
-                      <td style={{ fontWeight:700 }}>{fmt(e.amount)}</td>
-                      <td><button onClick={()=>deleteExpense(e.id)} style={{ background:"none",border:"none",color:"var(--red)",cursor:"pointer",fontSize:16 }}>✕</button></td>
-                    </tr>
-                  )
-                })}
-                {catFilter!=="gaji" && filteredExp.length===0 && pos.every(p=>poCategoryBreakdown(p).filter(({catId})=>catFilter==="all"||catFilter===catId).length===0) && <tr><td colSpan={6} style={{ textAlign:"center",color:"var(--ink5)",padding:"32px 0" }}>No expenses yet</td></tr>}
+                  }) : combinedExpRows.map(row => {
+                    if (row.type === "po") {
+                      const cat = EXPENSE_CATEGORIES.find(c=>c.id===row.catId) || { icon:"📦", label:row.catId }
+                      const p = row.po
+                      return (
+                        <tr key={row.key} onClick={()=>setPoDetailModal(p)} style={{ background:"#FFFBF0", cursor:"pointer" }}
+                          onMouseEnter={ev=>ev.currentTarget.style.background="#FFF3D6"} onMouseLeave={ev=>ev.currentTarget.style.background="#FFFBF0"}>
+                          <td style={{ fontSize:12 }}>{p.date}</td>
+                          <td><span style={{ fontSize:11,fontWeight:700,padding:"2px 8px",borderRadius:10,background:"#FFF7E6",color:"#FF8B00" }}>{cat.icon} {cat.label}</span></td>
+                          <td style={{ fontSize:12 }}>{p.supplierName||p.supplier_name} — {p.invoiceNo||p.invoice_no||"PO"}</td>
+                          <td style={{ fontSize:12,color:"#6B778C" }}>Auto</td>
+                          <td style={{ fontWeight:700 }}>{fmt(row.amount)}</td>
+                          <td style={{ fontSize:11,color:"#6B778C" }}>auto</td>
+                        </tr>
+                      )
+                    }
+                    const e = row.exp
+                    const cat = EXPENSE_CATEGORIES.find(c=>c.id===e.cat)||{ icon:"📦",label:e.cat }
+                    return (
+                      <tr key={row.key} onClick={()=>openExpDetail(e)} style={{ cursor:"pointer" }} onMouseEnter={ev=>ev.currentTarget.style.background="#F8FAFC"} onMouseLeave={ev=>ev.currentTarget.style.background=""}>
+                        <td style={{ fontSize:12 }}>{e.date}</td>
+                        <td><span style={{ fontSize:11,fontWeight:700,padding:"2px 8px",borderRadius:10,background:"var(--surface)",color:"var(--ink4)" }}>{cat.icon} {cat.label}</span></td>
+                        <td style={{ fontSize:13 }}>{e.description}</td>
+                        <td style={{ fontSize:12,color:"#6B778C" }}>{e.payment_method}</td>
+                        <td style={{ fontWeight:700 }}>{fmt(e.amount)}</td>
+                        <td><button onClick={()=>deleteExpense(e.id)} style={{ background:"none",border:"none",color:"var(--red)",cursor:"pointer",fontSize:16 }}>✕</button></td>
+                      </tr>
+                    )
+                  })}
+                {catFilter!=="gaji" && combinedExpRows.length===0 && <tr><td colSpan={6} style={{ textAlign:"center",color:"var(--ink5)",padding:"32px 0" }}>No expenses yet</td></tr>}
               </tbody>
             </table>
           </div>
