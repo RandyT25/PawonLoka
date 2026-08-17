@@ -588,7 +588,7 @@ export default function Accounting() {
     searchedExp.forEach(e => {
       expLineCategories(e).forEach((line, i) => {
         if (catFilter!=="all" && line.catId!==catFilter) return
-        rows.push({ type:"manual", date:e.date, key:e.id+"-"+i, exp:e, line })
+        rows.push({ type:"manual", date:e.date, key:e.id+"-"+i, exp:e, line, isFirstLine:i===0 })
       })
     })
     return rows.sort((a,b) => (b.date||"").localeCompare(a.date||""))
@@ -864,14 +864,19 @@ export default function Accounting() {
                     const e = row.exp
                     const line = row.line
                     const cat = EXPENSE_CATEGORIES.find(c=>c.id===line.catId)||{ icon:"📦",label:line.catId }
+                    // A multi-account transaction renders as several rows (one per account,
+                    // so each amount lands in its own Laba Rugi category) — but it's still
+                    // ONE transaction, so only show one delete action for it, on its first
+                    // line, rather than a separate ✕ per row that would each delete the
+                    // whole thing (including the other account's amount).
                     return (
-                      <tr key={row.key} onClick={()=>openExpDetail(e)} style={{ cursor:"pointer" }} onMouseEnter={ev=>ev.currentTarget.style.background="#F8FAFC"} onMouseLeave={ev=>ev.currentTarget.style.background=""}>
-                        <td style={{ fontSize:12 }}>{e.date}</td>
+                      <tr key={row.key} onClick={()=>openExpDetail(e)} style={{ cursor:"pointer", borderTop: row.isFirstLine ? undefined : "none" }} onMouseEnter={ev=>ev.currentTarget.style.background="#F8FAFC"} onMouseLeave={ev=>ev.currentTarget.style.background=""}>
+                        <td style={{ fontSize:12, color: row.isFirstLine ? undefined : "var(--ink6, #B0B7C3)" }}>{row.isFirstLine ? e.date : "↳"}</td>
                         <td><span style={{ fontSize:11,fontWeight:700,padding:"2px 8px",borderRadius:10,background:"var(--surface)",color:"var(--ink4)" }}>{cat.icon} {cat.label}</span></td>
                         <td style={{ fontSize:13 }}>{line.description || e.description}</td>
                         <td style={{ fontSize:12,color:"#6B778C" }}>{e.payment_method}</td>
                         <td style={{ fontWeight:700 }}>{fmt(line.amount)}</td>
-                        <td><button onClick={ev=>{ev.stopPropagation();deleteExpense(e.id)}} style={{ background:"none",border:"none",color:"var(--red)",cursor:"pointer",fontSize:16 }} title="Hapus seluruh transaksi">✕</button></td>
+                        <td>{row.isFirstLine && <button onClick={ev=>{ev.stopPropagation();deleteExpense(e.id)}} style={{ background:"none",border:"none",color:"var(--red)",cursor:"pointer",fontSize:16 }} title="Hapus seluruh transaksi">✕</button>}</td>
                       </tr>
                     )
                   })}
