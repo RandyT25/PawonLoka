@@ -8,6 +8,7 @@ const fmt = n => "Rp " + Number(n||0).toLocaleString("id-ID")
 const EXPENSE_CATEGORIES = [
   { id:"bahan_baku",      label:"Bahan Baku",        icon:"🥩", auto:true  },
   { id:"kitchen",         label:"Kitchen Supplies",   icon:"🍳", auto:false },
+  { id:"packaging",       label:"Packaging",          icon:"🥡", auto:false },
   { id:"bar",             label:"Bar Supplies",        icon:"🧃", auto:false },
   { id:"floor_cleaning",  label:"Floor & Cleaning",   icon:"🧹", auto:false },
   { id:"gas_utilities",   label:"Gas & Utilities",    icon:"🔥", auto:false },
@@ -101,6 +102,7 @@ export default function Accounting() {
   const [expenses,     setExpenses]     = useState([])
   const [pos,          setPos]          = useState([]) // purchase orders
   const [ingredients,  setIngredients]  = useState([])
+  const [recipeIngIds, setRecipeIngIds] = useState(new Set())
   const [staff,        setStaff]        = useState([])
   const [kasBonList,   setKasBonList]   = useState([])
   const [wasteRecords,     setWasteRecords]     = useState([])
@@ -188,7 +190,7 @@ export default function Accounting() {
     const lastDay = new Date(parseInt(y), parseInt(m), 0)
     const to = `${lastDay.getFullYear()}-${String(lastDay.getMonth()+1).padStart(2,"0")}-${String(lastDay.getDate()).padStart(2,"0")}`
 
-    const [ordRes, expRes, poRes, staffRes, kbRes, obRes, ingRes, wasteRes, consumeRes, opnameRes] = await Promise.all([
+    const [ordRes, expRes, poRes, staffRes, kbRes, obRes, ingRes, wasteRes, consumeRes, opnameRes, recipeRes, subRecipeIngRes] = await Promise.all([
       supabase.from("orders").select("*").eq("status","Paid").gte("created_at",from+"T00:00:00+08:00").lte("created_at",to+"T23:59:59+08:00"),
       supabase.from("expenses").select("*").gte("date",from).lte("date",to).order("date",{ascending:false}),
       supabase.from("purchase_orders").select("*").eq("status","Paid").gte("date",from).lte("date",to),
@@ -199,6 +201,8 @@ export default function Accounting() {
       supabase.from("waste_records").select("*").gte("date",from).lte("date",to),
       supabase.from("staff_consumption").select("*").gte("date",from).lte("date",to),
       supabase.from("stock_opname").select("id,date,total_variance").gte("date",from).lte("date",to),
+      supabase.from("recipes").select("ingredient_id"),
+      supabase.from("sub_recipe_ingredients").select("ingredient_id"),
     ])
 
     setOrders(ordRes.data||[])
@@ -211,6 +215,10 @@ export default function Accounting() {
     setWasteRecords(wasteRes.data||[])
     setStaffConsumption(consumeRes.data||[])
     setStockOpnameList(opnameRes.data||[])
+    setRecipeIngIds(new Set([
+      ...(recipeRes.data||[]).map(r=>r.ingredient_id),
+      ...(subRecipeIngRes.data||[]).map(r=>r.ingredient_id),
+    ]))
     setLoading(false)
   }
 
@@ -235,18 +243,30 @@ export default function Accounting() {
     return m
   }, [ingredients])
 
+  // "Packaging" ingredients are assumed to flow into COGS the same way food does (via a
+  // recipe), but most never actually get added to any dish/sub-recipe — takeout boxes,
+  // cups, plastic wrap are bought and used directly, not "cooked into" a product. Left as
+  // bahan_baku, their entire purchase cost fell into neither COGS (nothing pulls it in)
+  // nor opex (assumed already in COGS) — confirmed live: Rp 1,245,000 of July's Packaging
+  // spend was invisible everywhere. Only route a Packaging item to bahan_baku if it's
+  // actually referenced by a real recipe; otherwise it's a genuine operating expense.
+  function classifyIngredientExpenseCat(ingredientId, ingCat) {
+    if (ingCat === "Packaging" && !recipeIngIds.has(ingredientId)) return "packaging"
+    return SUPPLY_CATEGORY_TO_EXPENSE_CAT[ingCat] || "bahan_baku"
+  }
+
   const poByCategory = useMemo(() => {
     const buckets = {}
     pos.forEach(p => {
       const items = p.items || p.po_items || []
       items.forEach(item => {
         const ingCat = ingredientCatById[item.ingredient_id]
-        const expCat = SUPPLY_CATEGORY_TO_EXPENSE_CAT[ingCat] || "bahan_baku"
+        const expCat = classifyIngredientExpenseCat(item.ingredient_id, ingCat)
         buckets[expCat] = (buckets[expCat]||0) + (item.total_cost||0)
       })
     })
     return buckets
-  }, [pos, ingredientCatById])
+  }, [pos, ingredientCatById, recipeIngIds])
 
   const bahanBakuPO = poByCategory["bahan_baku"] || 0
 
@@ -264,7 +284,7 @@ export default function Accounting() {
     const buckets = {}
     items.forEach(item => {
       const ingCat = ingredientCatById[item.ingredient_id]
-      const expCat = SUPPLY_CATEGORY_TO_EXPENSE_CAT[ingCat] || "bahan_baku"
+      const expCat = classifyIngredientExpenseCat(item.ingredient_id, ingCat)
       buckets[expCat] = (buckets[expCat]||0) + (item.total_cost||0)
     })
     return Object.entries(buckets).map(([catId,amount]) => ({ catId, amount }))
@@ -1647,7 +1667,7 @@ export default function Accounting() {
                   <tbody>
                     {items.map((item,i) => {
                       const ingCat = ingredientCatById[item.ingredient_id]
-                      const expCat = SUPPLY_CATEGORY_TO_EXPENSE_CAT[ingCat] || "bahan_baku"
+                      const expCat = classifyIngredientExpenseCat(item.ingredient_id, ingCat)
                       const cat = EXPENSE_CATEGORIES.find(c=>c.id===expCat) || { icon:"📦", label:expCat }
                       return (
                         <tr key={i} style={{ borderBottom:"1px solid #F0F4F8" }}>
