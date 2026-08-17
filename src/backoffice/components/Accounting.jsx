@@ -328,9 +328,26 @@ export default function Accounting() {
   const cashOut  = poTotal + salaryTotal + manualExpenses.filter(e=>e.payment_method==="Cash").reduce((a,e)=>a+(e.amount||0),0)
   const netCash  = (openingBal.amount||0) + cashIn - cashOut
 
+  // A single "+ Pengeluaran" transaction can cover multiple accounts (e.g. one BKK paying
+  // both Listrik and IPL) — expenses.cat only ever reflects the FIRST line's account, so
+  // any category math keyed off e.cat silently dumps a multi-line transaction's entire
+  // amount onto just one category. This explodes a transaction into one entry per actual
+  // line item, each attributed to its own account's category — mirrors poCategoryBreakdown
+  // on the PO side, which already splits multi-category purchases correctly.
+  function expLineCategories(e) {
+    const lines = e.lines?.length ? e.lines : [{ coa_name:e.cat, description:e.description, amount:e.amount }]
+    return lines.map(l => ({
+      catId: COA_NAME_TO_EXPENSE_CAT[l.coa_name] || (EXPENSE_CATEGORIES.some(c=>c.id===l.coa_name) ? l.coa_name : "lain"),
+      amount: parseFloat(l.amount)||0,
+      description: l.description,
+      coa_name: l.coa_name,
+    }))
+  }
+
   // Expenses by category for display
   function catTotal(catId) {
-    const manual = manualExpenses.filter(e=>e.cat===catId).reduce((a,e)=>a+(e.amount||0),0)
+    const manual = manualExpenses.reduce((sum,e) =>
+      sum + expLineCategories(e).filter(l=>l.catId===catId).reduce((a,l)=>a+l.amount,0), 0)
     return manual + (poByCategory[catId]||0)
   }
 
@@ -490,7 +507,7 @@ export default function Accounting() {
         { label:"Laba Rugi", head:["Item","Jumlah"], body:plRows },
         { label:"Arus Kas", head:["Item","Jumlah"], body:cashflowRows },
         { label:"Detail Pengeluaran", head:["Tanggal","Kategori","Deskripsi","Jumlah"],
-          body: manualExpenses.map(e=>[e.date, e.cat, e.description, fmt(e.amount)]) },
+          body: manualExpenses.flatMap(e=>expLineCategories(e).map(l=>[e.date, l.catId, l.description||e.description, fmt(l.amount)])) },
         { label:"Purchase Orders", head:["Tanggal","Supplier","Invoice","Total"],
           body: pos.map(p=>[p.date, p.supplierName||p.supplier_name, p.invoiceNo||p.invoice_no, fmt(p.total)]) },
       ],
@@ -538,7 +555,7 @@ export default function Accounting() {
           name: "Pengeluaran",
           columns: ["Tanggal","Kategori","Deskripsi","Jumlah"],
           colWidths: [14,18,28,18],
-          rows: manualExpenses.map(e=>[e.date, e.cat, e.description, e.amount]),
+          rows: manualExpenses.flatMap(e=>expLineCategories(e).map(l=>[e.date, l.catId, l.description||e.description, l.amount])),
         },
         {
           name: "Purchase Orders",
@@ -550,16 +567,16 @@ export default function Accounting() {
     })
   }
 
-  const filteredExp = manualExpenses.filter(e=>{
-    const matchCat = catFilter==="all"||e.cat===catFilter
-    const matchSearch = !expSearch||e.description?.toLowerCase().includes(expSearch.toLowerCase())
-    return matchCat&&matchSearch
-  })
+  // Matches a manual expense transaction against the search box (whole-transaction
+  // description, not per-line — searching is about finding a transaction).
+  const searchedExp = manualExpenses.filter(e => !expSearch || e.description?.toLowerCase().includes(expSearch.toLowerCase()))
 
   // Auto (PO) rows and manual rows used to render as two separate, independently-unsorted
   // blocks (POs have no .order() on their query, manual rows were sorted but appended
   // after every PO row regardless of date) — combine + sort once so "Tanggal" is actually
-  // chronological across both sources, most recent first.
+  // chronological across both sources, most recent first. Manual expenses are exploded
+  // per line item (see expLineCategories) so a multi-account transaction shows — and
+  // filters — correctly per account, not lumped under just its first line.
   const combinedExpRows = useMemo(() => {
     if (catFilter === "gaji") return []
     const rows = []
@@ -568,9 +585,14 @@ export default function Accounting() {
         .filter(({catId}) => catFilter==="all" || catFilter===catId)
         .forEach(({catId, amount}) => rows.push({ type:"po", date:p.date, key:p.id+"-"+catId, po:p, catId, amount }))
     })
-    filteredExp.forEach(e => rows.push({ type:"manual", date:e.date, key:e.id, exp:e }))
+    searchedExp.forEach(e => {
+      expLineCategories(e).forEach((line, i) => {
+        if (catFilter!=="all" && line.catId!==catFilter) return
+        rows.push({ type:"manual", date:e.date, key:e.id+"-"+i, exp:e, line })
+      })
+    })
     return rows.sort((a,b) => (b.date||"").localeCompare(a.date||""))
-  }, [pos, filteredExp, catFilter])
+  }, [pos, searchedExp, catFilter])
 
   if (loading) return <div style={{ padding:40,textAlign:"center",color:"var(--ink5)" }}>Loading...</div>
 
@@ -840,15 +862,16 @@ export default function Accounting() {
                       )
                     }
                     const e = row.exp
-                    const cat = EXPENSE_CATEGORIES.find(c=>c.id===e.cat)||{ icon:"📦",label:e.cat }
+                    const line = row.line
+                    const cat = EXPENSE_CATEGORIES.find(c=>c.id===line.catId)||{ icon:"📦",label:line.catId }
                     return (
                       <tr key={row.key} onClick={()=>openExpDetail(e)} style={{ cursor:"pointer" }} onMouseEnter={ev=>ev.currentTarget.style.background="#F8FAFC"} onMouseLeave={ev=>ev.currentTarget.style.background=""}>
                         <td style={{ fontSize:12 }}>{e.date}</td>
                         <td><span style={{ fontSize:11,fontWeight:700,padding:"2px 8px",borderRadius:10,background:"var(--surface)",color:"var(--ink4)" }}>{cat.icon} {cat.label}</span></td>
-                        <td style={{ fontSize:13 }}>{e.description}</td>
+                        <td style={{ fontSize:13 }}>{line.description || e.description}</td>
                         <td style={{ fontSize:12,color:"#6B778C" }}>{e.payment_method}</td>
-                        <td style={{ fontWeight:700 }}>{fmt(e.amount)}</td>
-                        <td><button onClick={()=>deleteExpense(e.id)} style={{ background:"none",border:"none",color:"var(--red)",cursor:"pointer",fontSize:16 }}>✕</button></td>
+                        <td style={{ fontWeight:700 }}>{fmt(line.amount)}</td>
+                        <td><button onClick={ev=>{ev.stopPropagation();deleteExpense(e.id)}} style={{ background:"none",border:"none",color:"var(--red)",cursor:"pointer",fontSize:16 }} title="Hapus seluruh transaksi">✕</button></td>
                       </tr>
                     )
                   })}
