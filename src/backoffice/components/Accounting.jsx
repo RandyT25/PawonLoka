@@ -109,6 +109,7 @@ export default function Accounting() {
   const [openingBal,   setOpeningBal]   = useState(() => ({ id: new Date().toISOString().slice(0,7), amount:300000 }))
   const [loading,      setLoading]      = useState(true)
   const [expModal,     setExpModal]     = useState(false)
+  const [expEditId,    setExpEditId]    = useState(null)
   const [kasBonModal,  setKasBonModal]  = useState(false)
   const [kbExpanded,   setKbExpanded]   = useState({})
   const [expForm,      setExpForm]      = useState({ date:new Date().toISOString().slice(0,10), category:"kitchen", description:"", amount:"", payment_method:"Cash", notes:"" })
@@ -354,6 +355,7 @@ export default function Accounting() {
 
   async function openNewExpense() {
     await loadExpCoa()
+    setExpEditId(null)
     const txNo = await genBkkNo()
     setExpTransNo(txNo)
     setExpAkunAsal("")
@@ -374,13 +376,27 @@ export default function Accounting() {
     setExpDetailModal(e)
   }
 
+  // Opens the same "Tambah Pengeluaran" form pre-filled for editing an existing
+  // manual entry (openExpDetail already loads all the same fields for the read-only
+  // view — this just also flags which row to UPDATE instead of INSERT on save).
+  async function openEditExpense(e) {
+    await loadExpCoa()
+    setExpEditId(e.id)
+    setExpTransNo(e.transaction_no || "")
+    setExpAkunAsal(e.akun_asal || "")
+    setExpTime(e.time || new Date().toLocaleTimeString("id-ID",{hour:"2-digit",minute:"2-digit"}))
+    setExpLines(e.lines || [{ coa_id:"", coa_name:e.cat||"", description:e.description||"", amount:e.amount||0 }])
+    setExpForm(f=>({...f, date:e.date||"", notes:e.notes||"" }))
+    setExpDetailModal(null)
+    setExpModal(true)
+  }
+
   async function saveExpense() {
     const validLines = expLines.filter(l => l.amount && parseFloat(l.amount) > 0)
     if (validLines.length === 0) { alert("Tambahkan minimal satu detail pengeluaran"); return }
     setSaving(true)
     const baseDescription = expLines.map(l=>l.description).filter(Boolean).join(", ") || "Pengeluaran"
-    const { error } = await supabase.from("expenses").insert({
-      id: Date.now(),
+    const payload = {
       transaction_no: expTransNo,
       date: expForm.date,
       time: expTime,
@@ -390,10 +406,14 @@ export default function Accounting() {
       amount: expLines.reduce((a,l)=>a+(parseFloat(l.amount)||0),0),
       payment_method: expForm.payment_method,
       lines: expLines.filter(l=>l.amount&&parseFloat(l.amount)>0),
-    })
+    }
+    const { error } = expEditId
+      ? await supabase.from("expenses").update(payload).eq("id", expEditId)
+      : await supabase.from("expenses").insert({ id: Date.now(), ...payload })
     setSaving(false)
     if (error) { alert("Gagal menyimpan pengeluaran: " + error.message); return }
     setExpModal(false)
+    setExpEditId(null)
     setExpForm({ date:new Date().toISOString().slice(0,10), category:"kitchen", description:"", amount:"", payment_method:"Cash", notes:"" })
     await load()
   }
@@ -1285,7 +1305,7 @@ export default function Accounting() {
         <div className="bo-overlay" onMouseDown={e=>e.target===e.currentTarget&&setExpModal(false)}>
           <div className="bo-modal" style={{ maxWidth:700, maxHeight:"94vh", display:"flex", flexDirection:"column" }}>
             <div className="bo-modal-header">
-              <div className="bo-modal-title">Tambah Pengeluaran Kas & Bank</div>
+              <div className="bo-modal-title">{expEditId ? "Edit Pengeluaran Kas & Bank" : "Tambah Pengeluaran Kas & Bank"}</div>
               <button className="bo-modal-close" onClick={()=>setExpModal(false)}>x</button>
             </div>
             <div className="bo-modal-body" style={{ overflowY:"auto", flex:1 }}>
@@ -1383,7 +1403,7 @@ export default function Accounting() {
 
             </div>
             <div className="bo-modal-footer">
-              <button onClick={()=>setExpModal(false)} className="bo-btn bo-btn-ghost">Batal</button>
+              <button onClick={()=>{setExpModal(false);setExpEditId(null)}} className="bo-btn bo-btn-ghost">Batal</button>
               <button onClick={saveExpense} disabled={saving} className="bo-btn bo-btn-primary">
                 {saving ? "Menyimpan..." : "Simpan"}
               </button>
@@ -1536,7 +1556,10 @@ export default function Accounting() {
             <div className="bo-modal-footer" style={{ justifyContent:"space-between" }}>
               <button onClick={()=>deleteExpense(expDetailModal.id).then(()=>setExpDetailModal(null))}
                 className="bo-btn bo-btn-sm" style={{ background:"#FFEBE6", color:"#DE350B", border:"none" }}>Hapus</button>
-              <button onClick={()=>setExpDetailModal(null)} className="bo-btn bo-btn-ghost">Tutup</button>
+              <div style={{ display:"flex", gap:8 }}>
+                <button onClick={()=>openEditExpense(expDetailModal)} className="bo-btn bo-btn-sm bo-btn-primary">Edit</button>
+                <button onClick={()=>setExpDetailModal(null)} className="bo-btn bo-btn-ghost">Tutup</button>
+              </div>
             </div>
           </div>
         </div>
