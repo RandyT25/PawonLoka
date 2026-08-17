@@ -305,7 +305,7 @@ export default function Accounting() {
 
   // Expenses by category for display
   function catTotal(catId) {
-    const manual = manualExpenses.filter(e=>e.category===catId).reduce((a,e)=>a+(e.amount||0),0)
+    const manual = manualExpenses.filter(e=>e.cat===catId).reduce((a,e)=>a+(e.amount||0),0)
     return manual + (poByCategory[catId]||0)
   }
 
@@ -341,7 +341,7 @@ export default function Accounting() {
 
   async function openExpDetail(e) {
     await loadExpCoa()
-    const lines = e.lines || [{ coa_id:"", coa_name:e.category||"", description:e.description||"", amount:e.amount||0 }]
+    const lines = e.lines || [{ coa_id:"", coa_name:e.cat||"", description:e.description||"", amount:e.amount||0 }]
     setExpTransNo(e.transaction_no || "—")
     setExpAkunAsal(e.akun_asal || "")
     setExpTime(e.time || "—")
@@ -354,23 +354,24 @@ export default function Accounting() {
     const validLines = expLines.filter(l => l.amount && parseFloat(l.amount) > 0)
     if (validLines.length === 0) { alert("Tambahkan minimal satu detail pengeluaran"); return }
     setSaving(true)
-    await supabase.from("expenses").insert({
-      id:"EXP-"+Date.now(),
+    const baseDescription = expLines.map(l=>l.description).filter(Boolean).join(", ") || "Pengeluaran"
+    const { error } = await supabase.from("expenses").insert({
+      id: Date.now(),
       transaction_no: expTransNo,
       date: expForm.date,
       time: expTime,
       akun_asal: expAkunAsal,
-      category: expLines[0]?.coa_name || expLines[0]?.coa_id || "manual",
-      description: expLines.map(l=>l.description).filter(Boolean).join(", ") || "Pengeluaran",
+      cat: expLines[0]?.coa_name || expLines[0]?.coa_id || "manual",
+      description: expForm.notes ? baseDescription + " — " + expForm.notes : baseDescription,
       amount: expLines.reduce((a,l)=>a+(parseFloat(l.amount)||0),0),
       payment_method: expForm.payment_method,
-      notes: expForm.notes,
       lines: expLines.filter(l=>l.amount&&parseFloat(l.amount)>0),
     })
+    setSaving(false)
+    if (error) { alert("Gagal menyimpan pengeluaran: " + error.message); return }
     setExpModal(false)
     setExpForm({ date:new Date().toISOString().slice(0,10), category:"kitchen", description:"", amount:"", payment_method:"Cash", notes:"" })
     await load()
-    setSaving(false)
   }
 
   async function deleteExpense(id) {
@@ -445,7 +446,7 @@ export default function Accounting() {
         { label:"Laba Rugi", head:["Item","Jumlah"], body:plRows },
         { label:"Arus Kas", head:["Item","Jumlah"], body:cashflowRows },
         { label:"Detail Pengeluaran", head:["Tanggal","Kategori","Deskripsi","Jumlah"],
-          body: manualExpenses.map(e=>[e.date, e.category, e.description, fmt(e.amount)]) },
+          body: manualExpenses.map(e=>[e.date, e.cat, e.description, fmt(e.amount)]) },
         { label:"Purchase Orders", head:["Tanggal","Supplier","Invoice","Total"],
           body: pos.map(p=>[p.date, p.supplierName||p.supplier_name, p.invoiceNo||p.invoice_no, fmt(p.total)]) },
       ],
@@ -493,7 +494,7 @@ export default function Accounting() {
           name: "Pengeluaran",
           columns: ["Tanggal","Kategori","Deskripsi","Jumlah"],
           colWidths: [14,18,28,18],
-          rows: manualExpenses.map(e=>[e.date, e.category, e.description, e.amount]),
+          rows: manualExpenses.map(e=>[e.date, e.cat, e.description, e.amount]),
         },
         {
           name: "Purchase Orders",
@@ -506,7 +507,7 @@ export default function Accounting() {
   }
 
   const filteredExp = manualExpenses.filter(e=>{
-    const matchCat = catFilter==="all"||e.category===catFilter
+    const matchCat = catFilter==="all"||e.cat===catFilter
     const matchSearch = !expSearch||e.description?.toLowerCase().includes(expSearch.toLowerCase())
     return matchCat&&matchSearch
   })
@@ -782,7 +783,7 @@ export default function Accounting() {
                       </tr>
                     )
                   }) : filteredExp.map(e=>{
-                  const cat = EXPENSE_CATEGORIES.find(c=>c.id===e.category)||{ icon:"📦",label:e.category }
+                  const cat = EXPENSE_CATEGORIES.find(c=>c.id===e.cat)||{ icon:"📦",label:e.cat }
                   return (
                     <tr key={e.id} onClick={()=>openExpDetail(e)} style={{ cursor:"pointer" }} onMouseEnter={ev=>ev.currentTarget.style.background="#F8FAFC"} onMouseLeave={ev=>ev.currentTarget.style.background=""}>
                       <td style={{ fontSize:12 }}>{e.date}</td>
@@ -1470,7 +1471,7 @@ export default function Accounting() {
                     </tr>
                   </thead>
                   <tbody>
-                    {(expDetailModal.lines||[{coa_name:expDetailModal.category,description:expDetailModal.description,amount:expDetailModal.amount}]).map((l,i)=>(
+                    {(expDetailModal.lines||[{coa_name:expDetailModal.cat,description:expDetailModal.description,amount:expDetailModal.amount}]).map((l,i)=>(
                       <tr key={i} style={{ borderBottom:"1px solid #F0F4F8" }}>
                         <td style={{ padding:"9px 12px", fontSize:13 }}>{l.coa_name||l.coa_id||"—"}</td>
                         <td style={{ padding:"9px 12px", fontSize:12, color:"var(--ink4)" }}>{l.description||"—"}</td>
