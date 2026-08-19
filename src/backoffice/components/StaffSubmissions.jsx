@@ -4,9 +4,9 @@ import { toBaseUnit, unitPriceFor } from "../../shared/unitConversion"
 
 function fmt(n) { return "Rp " + Number(n||0).toLocaleString("id-ID") }
 
-const TYPE_COLORS = { opname:"var(--brand)", waste:"var(--red)", consumption:"#F59E0B", production:"var(--green)", requisition:"#6554C0" }
-const TYPE_ICONS  = { opname:"📋", waste:"🗑️", consumption:"🍽️", production:"🏭", requisition:"🛒" }
-const TYPE_LABELS = { opname:"Stock Count", waste:"Waste", consumption:"Staff Meal", production:"Production", requisition:"Request" }
+const TYPE_COLORS = { opname:"var(--brand)", waste:"var(--red)", consumption:"#F59E0B", production:"var(--green)", requisition:"#6554C0", receiving:"#0EA5E9" }
+const TYPE_ICONS  = { opname:"📋", waste:"🗑️", consumption:"🍽️", production:"🏭", requisition:"🛒", receiving:"📦" }
+const TYPE_LABELS = { opname:"Stock Count", waste:"Waste", consumption:"Staff Meal", production:"Production", requisition:"Request", receiving:"Receiving" }
 
 // The stock_movements.type value that approveOne() writes for each stock-affecting
 // submission type when it actually runs. Used to detect submissions marked "approved"
@@ -786,7 +786,7 @@ export default function StaffSubmissions() {
 
       {/* Type filter — secondary refinement, visually lighter than the status tabs above */}
       <div style={{ display:"flex", gap:4, marginBottom:16, flexWrap:"wrap" }}>
-        {[["all","All Types"],["opname","Stock Count"],["waste","Waste"],["consumption","Staff Meal"],["production","Production"],["requisition","Request"]].map(([f,l])=>(
+        {[["all","All Types"],["opname","Stock Count"],["waste","Waste"],["consumption","Staff Meal"],["production","Production"],["requisition","Request"],["receiving","Receiving"]].map(([f,l])=>(
           <button key={f} onClick={()=>setTypeFilter(f)}
             className="bo-btn bo-btn-sm bo-btn-ghost"
             style={{ fontSize:11, opacity: typeFilter===f?1:0.6, fontWeight: typeFilter===f?700:500 }}>{TYPE_ICONS[f]||""} {l}</button>
@@ -827,6 +827,7 @@ export default function StaffSubmissions() {
                   : s.type==="waste" ? s.data.qty+" "+s.data.unit+" — "+s.data.ingredient_name
                   : s.type==="consumption" ? s.data.qty+" "+s.data.unit+" — "+s.data.ingredient_name
                   : s.type==="requisition" ? (s.data.items||[]).length+" items requested — "+fmt(reqTotal)+" total"
+                  : s.type==="receiving" ? (s.data.items||[]).length+" items — "+fmt(s.data.invoice_total)+" invoice, "+(s.data.supplier_name||"unknown supplier")
                   : (s.data.batch_qty ? s.data.batch_qty+"× resep · " : "")+(s.data.actual_yield??s.data.batch_qty)+" "+(s.data.yield_unit||s.data.unit||"")+" "+s.data.item_name
                 return (
                   <tr key={s.id} style={{ background: (isOrphanApproved(s) && !dismissedOrphanIds.has(s.id)) ? "var(--red-lt)"
@@ -879,7 +880,7 @@ export default function StaffSubmissions() {
       {/* View Modal */}
       {viewModal && (
         <div className="bo-overlay" onMouseDown={e=>e.target===e.currentTarget&&setViewModal(null)}>
-          <div className="bo-modal" style={{ maxWidth:viewModal.type==="opname"?720:560, maxHeight:"90vh" }}>
+          <div className="bo-modal" style={{ maxWidth:(viewModal.type==="opname"||viewModal.type==="receiving")?720:560, maxHeight:"90vh" }}>
             <div className="bo-modal-header">
               <div>
                 <div className="bo-modal-title">{TYPE_ICONS[viewModal.type]} {TYPE_LABELS[viewModal.type]} Report</div>
@@ -968,6 +969,40 @@ export default function StaffSubmissions() {
                   {[["Date",viewModal.data.date||"—"],["Ingredient",viewModal.data.ingredient_name],["Quantity",viewModal.data.qty+" "+viewModal.data.unit],["Est. Cost",fmt(viewModal.data.estimated_cost)],["Notes",viewModal.data.notes||"—"]].map(([k,v])=>(
                     <div key={k}><div style={{ fontSize:11, color:"var(--ink4)", fontWeight:700, textTransform:"uppercase" }}>{k}</div><div style={{ fontWeight:600, marginTop:3 }}>{v}</div></div>
                   ))}
+                </div>
+              )}
+              {viewModal.type==="receiving" && (
+                <div style={{ display:"grid", gap:14 }}>
+                  {[["Date",viewModal.data.date||"—"],["Supplier",viewModal.data.supplier_name||"—"],["Invoice Total",fmt(viewModal.data.invoice_total)],["Notes",viewModal.data.notes||"—"]].map(([k,v])=>(
+                    <div key={k}><div style={{ fontSize:11, color:"var(--ink4)", fontWeight:700, textTransform:"uppercase" }}>{k}</div><div style={{ fontWeight:600, marginTop:3 }}>{v}</div></div>
+                  ))}
+                  <div>
+                    <div style={{ fontSize:11, color:"var(--ink4)", fontWeight:700, textTransform:"uppercase", marginBottom:6 }}>Items</div>
+                    <div style={{ overflowX:"auto" }}>
+                    <table className="bo-table">
+                      <thead><tr><th>Item</th><th>Qty</th><th>Unit</th><th>Unit Cost</th></tr></thead>
+                      <tbody>
+                        {(viewModal.data.items||[]).map((item,i)=>(
+                          <tr key={i}>
+                            <td style={{ fontWeight:600 }}>{item.name}{!item.ingredient_id && <span style={{ color:"var(--red)", fontWeight:600 }}> ⚠ not matched</span>}</td>
+                            <td>{item.qty}</td>
+                            <td>{item.unit}</td>
+                            <td>{fmt(item.unit_cost)}{item.cost_estimated && <span style={{ color:"var(--ink4)", fontWeight:600 }}> (est.)</span>}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                    </div>
+                  </div>
+                  {viewModal.data.photo_url && (
+                    <div>
+                      <div style={{ fontSize:11, color:"var(--ink4)", fontWeight:700, textTransform:"uppercase", marginBottom:6 }}>Invoice Photo</div>
+                      <img src={viewModal.data.photo_url} alt="Invoice" style={{ maxWidth:"100%", borderRadius:8, border:"1px solid var(--surface3)" }} />
+                    </div>
+                  )}
+                  <div style={{ fontSize:12, color:"var(--ink4)", fontStyle:"italic" }}>
+                    Reference only — does not affect stock or cost. Finalize the real purchase through Bayar Faktur in Inventory.
+                  </div>
                 </div>
               )}
               {viewModal.type==="requisition" && (() => {
