@@ -51,6 +51,7 @@ const Orders          = lazy(() => import("./components/Orders"))
 const MarketPrices    = lazy(() => import("./components/MarketPrices"))
 const Profitability   = lazy(() => import("./components/Profitability"))
 const InvStockCompare = lazy(() => import("./components/inventory/InvStockCompare"))
+const InvPurchaseSpend= lazy(() => import("./components/inventory/InvPurchaseSpend"))
 
 function useNotifications() {
   const [pending, setPending] = useState(0)
@@ -187,6 +188,7 @@ const NAV = [
   { id:"inv-waste",         label:"Waste Recording" },
   { id:"inv-movements",      label:"Movement History" },
   { id:"inv-stock-compare", label:"Stock vs Purchase" },
+  { id:"inv-purchase-spend", label:"Top Purchases" },
   { id:"units-of-measure", label:"Units of Measure" },
   { id:"item-categories", label:"Item Categories" },
   { id:"staff-submissions", label:"Staff Reports" },
@@ -234,6 +236,7 @@ const NAV_LABELS = {
   "inv-suppliers": "Suppliers", "inv-production": "Production",
   "inv-opname": "Stock Opname", "inv-waste": "Waste Recording",
   "inv-movements": "Movement History", "inv-stock-compare": "Stock vs Purchase",
+  "inv-purchase-spend": "Top Purchases",
   "staff-submissions": "Staff Reports",
   employees: "Employees", departments: "Departments",
   shifts: "Shifts", schedule: "Schedule",
@@ -276,6 +279,7 @@ const SCREENS = {
   "inv-waste":       (props) => <Inventory {...props} initialTab="inv-waste" />,
   "inv-movements":      (props) => <Inventory {...props} initialTab="inv-movements" />,
   "inv-stock-compare":  InvStockCompare,
+  "inv-purchase-spend": InvPurchaseSpend,
   "staff-submissions":  StaffSubmissions,
   "import-export":      ImportExport,
   employees:         Employees,
