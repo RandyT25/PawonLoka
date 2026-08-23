@@ -125,8 +125,11 @@ export default function StaffPortal() {
   const [station,      setStation]      = useState(null)
   const [screen,       setScreen]       = useState("home")
   const [ingredients,  setIngredients]  = useState([])
+  const [ingredientsById, setIngredientsById] = useState({})
   const [subRecipes,   setSubRecipes]   = useState([])
   const [subRecipeIngs,setSubRecipeIngs]= useState([])
+  const [frozenProducts, setFrozenProducts] = useState([])
+  const [frozenRecipes,  setFrozenRecipes]  = useState([])
   const [saving,       setSaving]       = useState(false)
   const [done,         setDone]         = useState(false)
   const [opnameCounts, setOpnameCounts] = useState([])
@@ -135,7 +138,9 @@ export default function StaffPortal() {
   const [staffName,    setStaffName]    = useState("")
   const [wasteForm,    setWasteForm]    = useState({ ingredient_id:"", qty:"", reason:"Expired", notes:"", date:new Date().toISOString().slice(0,10) })
   const [consumptionForm, setConsumptionForm] = useState({ ingredient_id:"", qty:"", notes:"", date:new Date().toISOString().slice(0,10) })
+  const [prodType,     setProdType]     = useState("") // 'sub' | 'product'
   const [prodSubId,    setProdSubId]    = useState("")
+  const [prodProductSku, setProdProductSku] = useState("")
   const [prodBatchQty, setProdBatchQty] = useState("")
   const [prodYield,    setProdYield]    = useState("")
   const [prodYieldUnit,setProdYieldUnit]= useState("")
@@ -174,30 +179,39 @@ export default function StaffPortal() {
 
   async function loadData() {
     // Load from cache immediately for offline startup
-    const [cachedIngs, cachedSubs, cachedSubIngs] = await Promise.all([
+    const [cachedIngs, cachedSubs, cachedSubIngs, cachedFrozenProds, cachedFrozenRecipes] = await Promise.all([
       offlineStore.getCache('ingredients'),
       offlineStore.getCache('sub_recipes'),
       offlineStore.getCache('sub_recipe_ingredients'),
+      offlineStore.getCache('frozen_products'),
+      offlineStore.getCache('recipes'),
     ])
-    if (cachedIngs?.length)   { setIngredients(cachedIngs.filter(i => !i.name.includes("(sub)"))); setOpnameCounts(cachedIngs.map(i=>({ ingredient_id:i.id, name:i.name, unit:i.unit, conversions:i.conversions||[], input_unit:i.unit, system_qty:i.stock||0, actual_qty:"" }))) }
+    if (cachedIngs?.length)   { setIngredientsById(Object.fromEntries(cachedIngs.map(i=>[i.id,i]))); setIngredients(cachedIngs.filter(i => !i.name.includes("(sub)"))); setOpnameCounts(cachedIngs.map(i=>({ ingredient_id:i.id, name:i.name, unit:i.unit, conversions:i.conversions||[], input_unit:i.unit, system_qty:i.stock||0, actual_qty:"" }))) }
     if (cachedSubs?.length)   setSubRecipes(cachedSubs)
     if (cachedSubIngs?.length) setSubRecipeIngs(cachedSubIngs)
+    if (cachedFrozenProds?.length) setFrozenProducts(cachedFrozenProds)
+    if (cachedFrozenRecipes?.length) setFrozenRecipes(cachedFrozenRecipes)
     if ((stationStaff[station]||[]).length === 1) setStaffName(stationStaff[station][0])
 
     // Refresh from Supabase in background
     try {
-      const [{ data:ings }, { data:subs }, { data:subIngs }] = await Promise.all([
+      const [{ data:ings }, { data:subs }, { data:subIngs }, { data:frozenProds }, { data:allRecipes }] = await Promise.all([
         supabase.from("ingredients").select("id,name,unit,stock,cost_per_unit,supplier,station,conversions").order("name"),
         supabase.from("sub_recipes").select("*").order("name"),
         supabase.from("sub_recipe_ingredients").select("*"),
+        supabase.from("products").select("sku,name,cat,price").eq("cat","Frozen Food").eq("active",true).order("name"),
+        supabase.from("recipes").select("product_id,ingredient_id,qty,unit,ingredient_name"),
       ])
-      if (ings)    { setIngredients(ings.filter(i => !i.name.includes("(sub)"))); setOpnameCounts(ings.map(i=>({ ingredient_id:i.id, name:i.name, unit:i.unit, conversions:i.conversions||[], input_unit:i.unit, system_qty:i.stock||0, actual_qty:"" }))); offlineStore.setCache('ingredients', ings) }
+      if (ings)    { setIngredientsById(Object.fromEntries(ings.map(i=>[i.id,i]))); setIngredients(ings.filter(i => !i.name.includes("(sub)"))); setOpnameCounts(ings.map(i=>({ ingredient_id:i.id, name:i.name, unit:i.unit, conversions:i.conversions||[], input_unit:i.unit, system_qty:i.stock||0, actual_qty:"" }))); offlineStore.setCache('ingredients', ings) }
       if (subs)    { setSubRecipes(subs); offlineStore.setCache('sub_recipes', subs) }
       if (subIngs) { setSubRecipeIngs(subIngs); offlineStore.setCache('sub_recipe_ingredients', subIngs) }
+      if (frozenProds) { setFrozenProducts(frozenProds); offlineStore.setCache('frozen_products', frozenProds) }
+      if (allRecipes)   { setFrozenRecipes(allRecipes); offlineStore.setCache('recipes', allRecipes) }
     } catch { /* offline — already loaded from cache */ }
   }
 
   function selectSubRecipe(subId) {
+    setProdType("sub"); setProdProductSku("")
     setProdSubId(subId)
     if (!subId) { setProdUsed([]); return }
     const sub = subRecipes.find(s=>s.id===subId)
@@ -208,6 +222,30 @@ export default function StaffPortal() {
     } else {
       setProdUsed([{ ingredient_id:"", qty:"", unit:"" }])
     }
+  }
+
+  // Frozen retail products (e.g. "Ayam Taliwang Frozen") produced/packed directly from a
+  // prep ingredient via the same `recipes` link POS.jsx uses to cost/deduct at sale time —
+  // see selectSubRecipe() above for the parallel sub-recipe path.
+  function selectFrozenProduct(sku) {
+    setProdType("product"); setProdSubId("")
+    setProdProductSku(sku)
+    if (!sku) { setProdUsed([]); return }
+    const lines = frozenRecipes.filter(l=>l.product_id===sku)
+    if (lines.length) {
+      setProdUsed(lines.map(l=>{ const ing=ingredientsById[l.ingredient_id]; return { ingredient_id:l.ingredient_id, name:ing?.name||l.ingredient_name||"", qty:String(l.qty), unit:l.unit||ing?.unit||"" } }))
+    } else {
+      setProdUsed([{ ingredient_id:"", qty:"", unit:"" }])
+    }
+  }
+
+  function selectProductionTarget(compositeId) {
+    if (!compositeId) { setProdType(""); setProdSubId(""); setProdProductSku(""); setProdUsed([]); return }
+    const sep = compositeId.indexOf(":")
+    const type = compositeId.slice(0, sep)
+    const id   = compositeId.slice(sep + 1)
+    if (type === "prod") selectFrozenProduct(id)
+    else selectSubRecipe(id)
   }
 
   async function submit(type, data) {
@@ -248,6 +286,33 @@ export default function StaffPortal() {
   }
 
   async function submitProduction() {
+    if (prodType === "product") {
+      if (!prodProductSku) { alert("Pilih item terlebih dahulu"); return }
+      if (!prodBatchQty || parseFloat(prodBatchQty) <= 0) { alert("Masukkan jumlah pack"); return }
+      const product = frozenProducts.find(p => p.sku === prodProductSku)
+      const lines   = frozenRecipes.filter(l => l.product_id === prodProductSku)
+      const packs   = parseFloat(prodBatchQty)
+      const ingredients_used = lines.map(l => {
+        const ing = ingredientsById[l.ingredient_id]
+        return { ingredient_id:l.ingredient_id, name:ing?.name||l.ingredient_name||"", qty:Math.round(l.qty*packs*100)/100, unit:l.unit||ing?.unit||"" }
+      })
+      // No sub_recipe_id/item_id on purpose — approveOne() in StaffSubmissions.jsx only adds
+      // output stock when one of those resolves to a real ingredient. A frozen retail pack has
+      // no separate finished-goods stock: packing just consumes the prep ingredient directly
+      // (deductStock() in POS.jsx skips Frozen Food products at sale time to match).
+      await submit("production", {
+        product_sku: prodProductSku,
+        item_name: product?.name || "",
+        batch_qty: packs,
+        actual_yield: packs,
+        yield_unit: "pack",
+        notes: prodNotes,
+        date: prodDate||new Date().toISOString().slice(0,10),
+        needs_recipe_review: false,
+        ingredients_used
+      })
+      return
+    }
     if (!prodSubId) { alert("Pilih resep terlebih dahulu"); return }
     if (!prodBatchQty || parseFloat(prodBatchQty) <= 0) { alert("Masukkan jumlah batch"); return }
     const sub     = subRecipes.find(s => s.id === prodSubId)
@@ -284,7 +349,7 @@ export default function StaffPortal() {
     setOpnameDate(new Date().toISOString().slice(0,10))
     setWasteForm({ ingredient_id:"", qty:"", reason:"Expired", notes:"", date:new Date().toISOString().slice(0,10) })
     setConsumptionForm({ ingredient_id:"", qty:"", notes:"", date:new Date().toISOString().slice(0,10) })
-    setProdSubId(""); setProdBatchQty(""); setProdYield(""); setProdYieldUnit(""); setProdUsed([]); setProdNotes("")
+    setProdType(""); setProdSubId(""); setProdProductSku(""); setProdBatchQty(""); setProdYield(""); setProdYieldUnit(""); setProdUsed([]); setProdNotes("")
     setProdDate(new Date().toISOString().slice(0,10))
     setReqDate(new Date().toISOString().slice(0,10)); setReqNotes(""); setReqItems([{ ingredient_id:"", qty:"", unit:"" }])
     if ((stationStaff[station]||[]).length === 1) setStaffName(stationStaff[station][0])
@@ -523,16 +588,25 @@ export default function StaffPortal() {
   )
 
   if (screen==="production") {
-    const selectedSub = subRecipes.find(s => s.id === prodSubId)
+    const selectedSub     = prodType==="sub"     ? subRecipes.find(s => s.id === prodSubId) : null
+    const selectedProduct = prodType==="product" ? frozenProducts.find(p => p.sku === prodProductSku) : null
+    const selectedItem    = selectedSub || selectedProduct
     const batchQty    = parseFloat(prodBatchQty) || 0
-    const recipeLines = prodSubId ? subRecipeIngs.filter(l => l.sub_recipe_id === prodSubId) : []
+    const recipeLines = prodType==="product"
+      ? (prodProductSku ? frozenRecipes.filter(l => l.product_id === prodProductSku) : [])
+      : (prodSubId ? subRecipeIngs.filter(l => l.sub_recipe_id === prodSubId) : [])
     const preview     = recipeLines.map(l => {
-      const ing   = ingredients.find(i => i.id === l.ingredient_id)
+      const ing   = prodType==="product" ? ingredientsById[l.ingredient_id] : ingredients.find(i => i.id === l.ingredient_id)
       const total = l.qty * batchQty
-      return { name:ing?.name||"", perBatch:l.qty, unit:l.unit||ing?.unit||"", total, cost:total*(ing?.cost_per_unit||0) }
+      return { name:ing?.name||l.ingredient_name||"", perBatch:l.qty, unit:l.unit||ing?.unit||"", total, cost:total*(ing?.cost_per_unit||0) }
     })
     const totalCost = preview.reduce((s,p) => s+p.cost, 0)
-    const canSubmit = !saving && prodSubId && batchQty > 0
+    const canSubmit = !saving && ((prodType==="sub" && prodSubId) || (prodType==="product" && prodProductSku)) && batchQty > 0
+    const productionOptions = [
+      ...subRecipes.map(r => ({ id:"sub:"+r.id, name:r.name })),
+      ...frozenProducts.map(p => ({ id:"prod:"+p.sku, name:p.name })),
+    ].sort((a,b)=>a.name.localeCompare(b.name))
+    const productionValue = prodType==="product" ? (prodProductSku?"prod:"+prodProductSku:"") : (prodSubId?"sub:"+prodSubId:"")
 
     return (
       <div style={s.wrap}>
@@ -553,21 +627,26 @@ export default function StaffPortal() {
             <input type="date" value={prodDate} onChange={e=>setProdDate(e.target.value)} style={s.input} max={new Date().toISOString().slice(0,10)} />
           </div>
 
-          {/* Step 1 — Recipe selector */}
+          {/* Step 1 — Recipe/product selector */}
           <div style={s.card}>
-            <label style={s.label}>Resep yang dibuat *</label>
+            <label style={s.label}>Item yang diproduksi *</label>
             <SearchableSelect
-              options={subRecipes.map(r => ({ id:r.id, name:r.name }))}
-              value={prodSubId}
-              onChange={v => selectSubRecipe(v)}
-              placeholder="— Pilih resep —"
+              options={productionOptions}
+              value={productionValue}
+              onChange={v => selectProductionTarget(v)}
+              placeholder="— Pilih resep atau item frozen —"
             />
             {selectedSub && (
               <div style={{ marginTop:8, padding:"8px 12px", background:"#f0fff8", borderRadius:8, fontSize:12, color:"#00875A", fontWeight:700 }}>
                 1 batch = {selectedSub.yield_qty} {selectedSub.yield_unit||"gr"} {selectedSub.name}
               </div>
             )}
-            {!subRecipes.length && (
+            {selectedProduct && (
+              <div style={{ marginTop:8, padding:"8px 12px", background:"#f0fff8", borderRadius:8, fontSize:12, color:"#00875A", fontWeight:700 }}>
+                1 pack = 1 {selectedProduct.name}
+              </div>
+            )}
+            {!productionOptions.length && (
               <div style={{ fontSize:12, color:"#999", marginTop:8 }}>
                 Belum ada resep. Minta manager tambahkan di Backoffice → Recipes.
               </div>
@@ -575,9 +654,9 @@ export default function StaffPortal() {
           </div>
 
           {/* Step 2 — Batch count */}
-          {selectedSub && (
+          {selectedItem && (
             <div style={s.card}>
-              <label style={{ ...s.label, marginBottom:10 }}>Berapa batch yang dibuat hari ini? *</label>
+              <label style={{ ...s.label, marginBottom:10 }}>{prodType==="product" ? "Berapa pack yang dibuat hari ini? *" : "Berapa batch yang dibuat hari ini? *"}</label>
               <input
                 type="number" inputMode="decimal"
                 value={prodBatchQty}
@@ -589,11 +668,11 @@ export default function StaffPortal() {
           )}
 
           {/* Step 3 — Read-only ingredient preview */}
-          {selectedSub && batchQty > 0 && preview.length > 0 && (
+          {selectedItem && batchQty > 0 && preview.length > 0 && (
             <div style={s.card}>
               <div style={{ fontSize:13, fontWeight:700, marginBottom:10, color:"#444" }}>
                 📋 Bahan yang akan dipakai
-                <span style={{ fontSize:11, fontWeight:400, color:"#999", marginLeft:6 }}>otomatis dari resep × {batchQty} batch</span>
+                <span style={{ fontSize:11, fontWeight:400, color:"#999", marginLeft:6 }}>otomatis dari resep × {batchQty} {prodType==="product"?"pack":"batch"}</span>
               </div>
               {preview.map((p,i) => (
                 <div key={i} style={{ display:"flex", alignItems:"center", justifyContent:"space-between", padding:"9px 0", borderBottom:"1px solid #f5f5f5" }}>
@@ -614,7 +693,7 @@ export default function StaffPortal() {
           )}
 
           {/* Notes */}
-          {selectedSub && (
+          {selectedItem && (
             <div style={s.card}>
               <label style={s.label}>Catatan (opsional)</label>
               <input value={prodNotes} onChange={e=>setProdNotes(e.target.value)}

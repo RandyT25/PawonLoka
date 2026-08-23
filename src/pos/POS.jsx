@@ -339,10 +339,18 @@ export default function POS() {
     try {
       const skus = [...new Set(items.map(i => i.sku).filter(Boolean))]
       if (!skus.length) return
+      // Frozen Food items (packaged retail items like "Ayam Taliwang Frozen") have their recipe
+      // ingredients deducted at packing time instead (Staff Portal → Production Batch) — deducting
+      // again here on sale would double-count. Reuses the same 'products' offline cache offlineFullSync
+      // already populates, so this stays free/instant on the common (cache-hit) path.
+      const allProds = await qr(supabase.from('products').select('sku,cat'), { cache:'products', ms:5000 })
+      const frozenSkus = new Set((allProds||[]).filter(p => p.cat === 'Frozen Food').map(p => p.sku))
+      const deductibleSkus = skus.filter(s => !frozenSkus.has(s))
+      if (!deductibleSkus.length) return
       // Batch fetch all recipes for all SKUs in one query
       const allRecipes = await qr(supabase.from('recipes')
         .select('product_id, ingredient_id, qty, unit')
-        .in('product_id', skus), { ms:5000 })
+        .in('product_id', deductibleSkus), { ms:5000 })
       if (!allRecipes?.length) return
       // Fetch ingredient records (incl. conversions) up front so recipe-line units can be converted to each ingredient's base unit
       const ingIds = [...new Set(allRecipes.map(r => r.ingredient_id))]
