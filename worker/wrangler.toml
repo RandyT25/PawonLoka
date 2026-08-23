@@ -1,0 +1,25 @@
+name = "pawonloka-agent"
+main = "src/index.ts"
+compatibility_date = "2026-08-01"
+compatibility_flags = ["nodejs_compat"]
+
+[[hyperdrive]]
+binding = "HYPERDRIVE"
+id = "d4e16c66a6a846dd9f5f961339b534a0"
+
+# agent_writer credential — MUST be the Supavisor pooler in session mode (port 5432), same as
+# HYPERDRIVE above. See worker/src/db.ts's comment for why this is non-negotiable.
+[[hyperdrive]]
+binding = "HYPERDRIVE_WRITER"
+id = "ec15cab0f13f4c939a34cc497805d26b"
+
+[vars]
+TELEGRAM_OWNER_ID = "1574673137"
+TELEGRAM_OPS_CHAT_ID = "-1004368214102"
+TELEGRAM_TOPIC_MAP = "{\"2\":\"waste\",\"3\":\"production\",\"4\":\"receiving\"}"
+# Same anon key already embedded in the SPA's client bundle (src/lib/supabase.js) — not a
+# secret, hence a plain var rather than a wrangler secret. Used only for Storage REST API
+# uploads to receiving-evidence; see worker/src/storageUpload.ts's comment for why Storage
+# specifically can't use the agent_writer Postgres-role credential model used everywhere else.
+SUPABASE_URL = "https://fnfivhnisigfnbvojonz.supabase.co"
+SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZuZml2aG5pc2lnZm5idm9qb256Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzkwMjE2MzEsImV4cCI6MjA5NDU5NzYzMX0.8VE_PW4JO6H9Z5sIPCFy0jzLo6Zqo8_qzPRi9w9xBfU"
