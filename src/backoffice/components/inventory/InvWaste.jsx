@@ -1,9 +1,18 @@
 import { useState, useEffect } from "react"
 import { supabase } from "../../../lib/supabase"
+import { toBaseUnit } from "../../../shared/unitConversion"
 
 function fmt(n) { return "Rp " + Number(n||0).toLocaleString("id-ID") }
 const REASONS = ["Expired","Damaged","Overproduction","Spillage","Other"]
 const REASON_COLORS = { Expired:"var(--red)", Damaged:"var(--amber)", Overproduction:"#6554C0", Spillage:"var(--brand)", Other:"var(--ink5)" }
+
+// Bought by weight but wasted by the piece (or vice versa) is normal — offer every unit the
+// ingredient actually has a conversion for, not just its base unit, same as InvPO.jsx's picker.
+function getUnits(ing) {
+  if (!ing) return []
+  const convs = typeof ing.conversions === "string" ? JSON.parse(ing.conversions||"[]") : (ing.conversions||[])
+  return [...new Set([ing.unit, ...convs.map(c=>c.unit)])]
+}
 
 export default function InvWaste() {
   const [waste,       setWaste]       = useState([])
@@ -21,7 +30,7 @@ export default function InvWaste() {
     setLoading(true)
     const [{ data:w }, { data:i }, { data:s }] = await Promise.all([
       supabase.from("waste_records").select("*").order("created_at", { ascending:false }),
-      supabase.from("ingredients").select("id,name,unit,stock,cost_per_unit"),
+      supabase.from("ingredients").select("id,name,unit,stock,cost_per_unit,conversions"),
       supabase.from("staff").select("id,name"),
     ])
     setWaste(w||[]); setIngredients(i||[]); setStaff(s||[])
@@ -33,11 +42,18 @@ export default function InvWaste() {
       const updated = {...f,[k]:v}
       if (k==="ingredient_id") {
         const ing = ingredients.find(i=>i.id===v)
-        if (ing) { updated.unit=ing.unit; setCostPreview((parseFloat(f.qty)||0)*(ing.cost_per_unit||0)) }
+        if (ing) {
+          updated.unit = ing.unit
+          const baseQty = toBaseUnit(ing, parseFloat(f.qty)||0, ing.unit)
+          setCostPreview(baseQty*(ing.cost_per_unit||0))
+        }
       }
-      if (k==="qty") {
+      if (k==="qty" || k==="unit") {
         const ing = ingredients.find(i=>i.id===f.ingredient_id)
-        setCostPreview((parseFloat(v)||0)*(ing?.cost_per_unit||0))
+        const qty  = k==="qty"  ? v : f.qty
+        const unit = k==="unit" ? v : f.unit
+        const baseQty = ing ? toBaseUnit(ing, parseFloat(qty)||0, unit) : 0
+        setCostPreview(baseQty*(ing?.cost_per_unit||0))
       }
       return updated
     })
@@ -49,10 +65,14 @@ export default function InvWaste() {
     setSaving(true)
     try {
       const wstId = "WST-"+String(waste.length+1).padStart(3,"0")
-      const qty = parseFloat(form.qty)
+      // Staff report waste in whatever unit is natural at the point of loss (a whole piece,
+      // a measured weight, etc.) — convert to the ingredient's own base unit before storing,
+      // same as PO receiving already does, so stock/cost stay on one consistent unit basis.
+      const enteredQty = parseFloat(form.qty)
+      const baseQty = toBaseUnit(ing, enteredQty, form.unit||ing.unit)
       const { error:wstErr } = await supabase.from("waste_records").insert({
         id:wstId, date:form.date, ingredient_id:ing.id, ingredient_name:ing.name,
-        qty, unit:form.unit||ing.unit,
+        qty:baseQty, unit:ing.unit,
         reason:form.reason, cost:costPreview,
         recorded_by:form.recorded_by||null, notes:form.notes||null
       })
@@ -61,13 +81,13 @@ export default function InvWaste() {
       // snapshot, so a sale/production that happened while this modal was open isn't
       // silently overwritten.
       const { data:freshIng } = await supabase.from("ingredients").select("stock").eq("id",ing.id).maybeSingle()
-      const newStock = Math.max(0, (freshIng?.stock ?? ing.stock ?? 0) - qty)
+      const newStock = Math.max(0, (freshIng?.stock ?? ing.stock ?? 0) - baseQty)
       const { error:updErr } = await supabase.from("ingredients").update({ stock:newStock }).eq("id",ing.id)
       if (updErr) throw updErr
       const { error:movErr } = await supabase.from("stock_movements").insert({
         id:"MOV-"+Date.now()+"-"+Math.random().toString(36).slice(2,6),
         type:"Waste", ingredient_id:ing.id, ingredient_name:ing.name,
-        qty:-qty, unit:form.unit||ing.unit, ref:wstId,
+        qty:-baseQty, unit:ing.unit, ref:wstId,
         note:form.reason+(form.notes?" — "+form.notes:""),
         date:form.date,
         time:new Date().toLocaleTimeString("id-ID",{hour:"2-digit",minute:"2-digit"})
@@ -136,7 +156,11 @@ export default function InvWaste() {
               </div>
               <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12, marginBottom:14 }}>
                 <div><label className="bo-label">Quantity *</label><input type="number" value={form.qty} onChange={e=>updateForm("qty",e.target.value)} className="bo-input" placeholder="0" /></div>
-                <div><label className="bo-label">Unit</label><input value={form.unit} onChange={e=>updateForm("unit",e.target.value)} className="bo-input" placeholder="Unit" /></div>
+                <div><label className="bo-label">Unit</label>
+                  <select value={form.unit} onChange={e=>updateForm("unit",e.target.value)} className="bo-select">
+                    {getUnits(ingredients.find(i=>i.id===form.ingredient_id)).map(u=><option key={u}>{u}</option>)}
+                  </select>
+                </div>
               </div>
               <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12, marginBottom:14 }}>
                 <div><label className="bo-label">Reason</label>

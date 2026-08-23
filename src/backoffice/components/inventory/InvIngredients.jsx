@@ -7,10 +7,11 @@ function fmtDec(n) { return "Rp " + Number(n||0).toLocaleString("id-ID", { minim
 
 const UNITS_FALLBACK = ["gr","kg","ml","L","Galon","pcs","Ekor","butir","biji","buah","ikat","lembar","bungkus","pack","sachet","botol","Can","tsp","tbsp","cup","porsi","portion","slice"]
 function emptyForm(mode) {
-  // No default category pre-selection — every ingredient needs a deliberate choice, not a
-  // silent "General"/"Other Supplies" fallback (that's exactly how items kept landing in a
-  // category nobody meant to pick). save() blocks submission until one is actually chosen.
-  return { name:"", sku:"", unit:"gr", min_stock:0, stock:0, cost_per_unit:0, supplier:"",
+  // No default category or unit pre-selection — every ingredient needs a deliberate choice, not
+  // a silent "General"/"gr" fallback (that's exactly how items kept landing in a category nobody
+  // meant to pick, or a unit nobody meant to set — see the Lemon Local/gr-vs-pcs waste bug).
+  // save() blocks submission until both are actually chosen.
+  return { name:"", sku:"", unit:"", min_stock:0, stock:0, cost_per_unit:0, supplier:"",
     category: "",
     track_stock: mode!=="supplies",
     station:["Kitchen"], conversions:[], last_purchase_price:0, last_purchase_unit:"" }
@@ -124,7 +125,7 @@ export default function InvIngredients({ mode="ingredients" }) {
   function closeModal() { setModal(null); setForm(EMPTY); setConvs([]) }
 
   // Bulk add — quick multi-row grid for adding several items at once
-  function emptyBulkRow() { return { name:"", unit:"gr", category:"", stock:0, cost_per_unit:0, supplier:"" } }
+  function emptyBulkRow() { return { name:"", unit:"", category:"", stock:0, cost_per_unit:0, supplier:"" } }
   function openBulk()            { setBulkRows(Array.from({length:5}, emptyBulkRow)); setBulkModal(true) }
   function closeBulk()           { setBulkModal(false); setBulkRows([]) }
   function addBulkRow()          { setBulkRows(r => [...r, emptyBulkRow()]) }
@@ -136,6 +137,8 @@ export default function InvIngredients({ mode="ingredients" }) {
     if (!valid.length) return
     const missingCat = valid.filter(r => !r.category)
     if (missingCat.length) { alert("Pilih kategori untuk semua baris terlebih dahulu: " + missingCat.map(r=>r.name.trim()).join(", ")); return }
+    const missingUnit = valid.filter(r => !r.unit)
+    if (missingUnit.length) { alert("Pilih satuan untuk semua baris terlebih dahulu: " + missingUnit.map(r=>r.name.trim()).join(", ")); return }
     setBulkSaving(true)
     const payload = valid.map((r,idx) => ({
       id:            "ING-"+Date.now()+"-"+idx,
@@ -183,6 +186,7 @@ export default function InvIngredients({ mode="ingredients" }) {
   async function save() {
     if (!form.name) return
     if (!form.category) { alert("Pilih kategori terlebih dahulu."); return }
+    if (!form.unit) { alert("Pilih satuan terlebih dahulu."); return }
     // Warn on a conversion factor that's almost certainly wrong (e.g. "1 kg = 1 gr" instead of 1000) —
     // this silently inflates WAC by orders of magnitude once a purchase is made in that unit.
     const BIG_UNITS = ["kg","L","Galon","dus","karung","box","sack","pack","sachet","bungkus","botol","ikat"]
@@ -433,7 +437,8 @@ export default function InvIngredients({ mode="ingredients" }) {
 
                 {/* Base unit row (always shown) */}
                 <div style={{ display:"grid", gridTemplateColumns:"90px 140px 100px 110px 1fr 28px", gap:8, marginBottom:8, padding:"8px 10px", background:"var(--surface)", borderRadius:"var(--r)", border:"1px solid var(--surface3)" }}>
-                  <select value={form.unit} onChange={e=>setForm(f=>({...f,unit:e.target.value}))} className="bo-select" style={{ fontSize:12 }}>
+                  <select value={form.unit} onChange={e=>setForm(f=>({...f,unit:e.target.value}))} className="bo-select" style={!form.unit?{ fontSize:12, borderColor:"var(--red)" }:{ fontSize:12 }}>
+                    <option value="">— Satuan —</option>
                     {unitsList.map(u=><option key={u}>{u}</option>)}
                   </select>
                   <div style={{ display:"flex", alignItems:"center", gap:4, fontSize:12, color:"var(--ink4)" }}>
@@ -516,7 +521,8 @@ export default function InvIngredients({ mode="ingredients" }) {
               {bulkRows.map((r,i) => (
                 <div key={i} style={{ display:"grid", gridTemplateColumns:"1fr 90px 150px 90px 110px 150px 28px", gap:8, marginBottom:6 }}>
                   <input value={r.name} onChange={e=>updateBulkRow(i,"name",e.target.value)} className="bo-input" style={{ fontSize:12 }} placeholder={isSupplies?"e.g. Sedotan":"e.g. Bawang Merah"} />
-                  <select value={r.unit} onChange={e=>updateBulkRow(i,"unit",e.target.value)} className="bo-select" style={{ fontSize:12 }}>
+                  <select value={r.unit} onChange={e=>updateBulkRow(i,"unit",e.target.value)} className="bo-select" style={r.name.trim()&&!r.unit?{ fontSize:12, borderColor:"var(--red)" }:{ fontSize:12 }}>
+                    <option value="">— Satuan —</option>
                     {unitsList.map(u=><option key={u}>{u}</option>)}
                   </select>
                   <select value={r.category} onChange={e=>updateBulkRow(i,"category",e.target.value)} className="bo-select" style={r.name.trim()&&!r.category?{ fontSize:12, borderColor:"var(--red)" }:{ fontSize:12 }}>

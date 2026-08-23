@@ -34,14 +34,29 @@ export default function Profitability() {
   const [saving,     setSaving]     = useState(false)
   const [syncing,    setSyncing]    = useState(false)
 
-  useEffect(() => { load() }, [])
+  useEffect(() => {
+    load()
+    // COGS can change in another tab (e.g. marking a PO Paid) while this page stays mounted
+    // in the background — refetch when it becomes visible again instead of only on mount.
+    const onVisible = () => { if (document.visibilityState === "visible") load() }
+    document.addEventListener("visibilitychange", onVisible)
+    return () => document.removeEventListener("visibilitychange", onVisible)
+  }, [])
 
   async function load() {
     setLoading(true)
-    const [{ data: prods }, { data: settings }] = await Promise.all([
-      supabase.from("products").select("sku,name,cat,price,cogs,active").eq("active",true).order("cat").order("name"),
+    const [prodRes, { data: settings }] = await Promise.all([
+      supabase.from("products").select("sku,name,cat,price,cogs,active,needs_recalc").eq("active",true).order("cat").order("name"),
       supabase.from("profitability_settings").select("*").eq("id","main").maybeSingle()
     ])
+    // Falls back to a select without needs_recalc if that column hasn't been migrated onto
+    // this environment yet — PostgREST rejects the whole request over one unknown column, so
+    // without this the entire product list would silently come back empty until it's added.
+    let prods = prodRes.data
+    if (prodRes.error) {
+      const retry = await supabase.from("products").select("sku,name,cat,price,cogs,active").eq("active",true).order("cat").order("name")
+      prods = retry.data
+    }
     setProducts(prods||[])
     if (settings?.target_food_cost) {
       setTarget(settings.target_food_cost)
@@ -268,7 +283,15 @@ export default function Profitability() {
                 return (
                   <tr key={p.sku} style={{ borderBottom:"1px solid #F0F4F8", background: hasChange ? "#F0F7FF" : rowBg }}>
                     <td style={{ padding:"8px 12px", fontSize:12, color:"var(--ink5)" }}>{idx+1}</td>
-                    <td style={{ padding:"8px 12px", fontWeight:700, fontSize:13 }}>{p.name}</td>
+                    <td style={{ padding:"8px 12px", fontWeight:700, fontSize:13 }}>
+                      {p.name}
+                      {p.needs_recalc && (
+                        <span title="A Paid PO touching this recipe's ingredients was voided since COGS was last recalculated — this value may be stale."
+                          style={{ marginLeft:6, fontSize:10, fontWeight:700, padding:"1px 6px", borderRadius:8, background:"var(--amber-lt)", color:"var(--amber)" }}>
+                          COGS mungkin belum sinkron
+                        </span>
+                      )}
+                    </td>
                     <td style={{ padding:"8px 12px", fontSize:11, color:"var(--ink4)" }}>{p.cat||"—"}</td>
                     <td style={{ padding:"8px 12px", fontSize:12, fontWeight:600, color: cpp > 0 ? "var(--ink)" : "var(--ink5)" }}>
                       {cpp > 0 ? fmt(cpp) : <span style={{ color:"var(--ink5)" }}>No COGS</span>}

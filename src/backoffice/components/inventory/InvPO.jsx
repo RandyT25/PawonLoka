@@ -17,6 +17,24 @@ function biggestUnit(ing) {
   return convs.reduce((max, c) => (parseFloat(c.qty)||0) > (parseFloat(max.qty)||0) ? c : max, convs[0]).unit || ing.unit
 }
 
+// Shared by the live per-row warning (POFormModal) and submitPO()'s final safety-net dialog,
+// so the two can never disagree. Extreme deviations are almost always the WRONG UNIT selected
+// (e.g. the "kg" the unit dropdown defaults to, when the purchase was really gr/pcs) rather than
+// a real price swing — this is exactly how Timun/Wortel/Bumbu Racik's cost_per_unit got poisoned
+// by 500kg/20kg entries that were actually 500gr/20pcs.
+function priceOutlierCheck(ing, qty, unit, totalCost) {
+  if (!ing || !ing.cost_per_unit) return { level:null }
+  qty = parseFloat(qty) || 0
+  if (qty <= 0) return { level:null }
+  const unitCost = (parseFloat(totalCost)||0) / qty
+  const refUnitCost = ing.cost_per_unit * toBaseUnit(ing, 1, unit)
+  if (refUnitCost <= 0) return { level:null }
+  const ratio = unitCost / refUnitCost
+  if (ratio > 20 || ratio < 0.05) return { level:"block", ratio, refUnitCost, unitCost }
+  if (ratio > 5 || ratio < 0.2)   return { level:"warn",  ratio, refUnitCost, unitCost }
+  return { level:null, ratio, refUnitCost, unitCost }
+}
+
 function computeWAC(ing, qtyBase, totalCostForBatch) {
   const oldStock     = parseFloat(ing.stock) || 0
   const oldCost      = parseFloat(ing.cost_per_unit) || 0
@@ -53,14 +71,39 @@ async function cascadeRecalc(updatedIngIds) {
       if (!ing) continue
       totalCost += toBaseUnit(ing, parseFloat(line.qty)||0, line.unit) * (ing.cost_per_unit||0)
     }
-    const { data: sub } = await supabase.from("sub_recipes").select("id,ingredient_id,yield_qty").eq("id", subId).single()
+    const { data: sub } = await supabase.from("sub_recipes").select("id,ingredient_id,yield_qty,yield_unit").eq("id", subId).single()
     if (!sub?.ingredient_id) return null
     const costPerYield = totalCost / (parseFloat(sub.yield_qty)||1)
+    // costPerYield is priced per sub.yield_unit (e.g. "porsi"), but ingredients.cost_per_unit
+    // must be priced per the shadow ingredient's own unit (e.g. "gr") — writing costPerYield
+    // straight in silently corrupted stock valuation by the conversion factor between the two
+    // (e.g. Chicken Steak: 1 porsi = 125 gr, so 8094.20/porsi got written as 8094.20/gr — a
+    // 125x overstatement of that ingredient's stock value). Convert whenever the units differ
+    // and a real conversion factor is known; otherwise warn instead of writing a wrong magnitude.
+    const shadowIng = ingMap[sub.ingredient_id]
+    let ingredientCostPerUnit = costPerYield
+    if (shadowIng && sub.yield_unit && sub.yield_unit !== shadowIng.unit) {
+      // Only auto-convert when a real conversion factor is on record for this exact yield_unit —
+      // e.g. Chicken Steak's "porsi" has a defined {qty:125} (1 porsi = 125 gr). A differing
+      // label with NO conversion entry (e.g. "portion" vs "pcs" on several other sub-recipes) is
+      // usually just a naming inconsistency where 1:1 is correct, not a real unit-scale gap — we
+      // can't tell those two cases apart from data alone, so leave behavior unchanged for them
+      // rather than risk silently breaking a currently-correct cost (that was the wrong-direction
+      // mistake to avoid: don't regress the harmless cases while fixing the real one).
+      const convs = typeof shadowIng.conversions === "string" ? JSON.parse(shadowIng.conversions||"[]") : (shadowIng.conversions||[])
+      const conv = convs.find(c => c.unit === sub.yield_unit)
+      const unitsPerYield = conv && parseFloat(conv.qty) > 0 ? parseFloat(conv.qty) : null
+      if (unitsPerYield) {
+        ingredientCostPerUnit = costPerYield / unitsPerYield
+      } else {
+        console.warn(`cascadeRecalc: sub-recipe ${subId} yields "${sub.yield_unit}" but ingredient ${sub.ingredient_id} is tracked in "${shadowIng.unit}" with no conversion between them — writing cost_per_unit as-is; add a conversion if these are actually different scales.`)
+      }
+    }
     await Promise.all([
-      supabase.from("ingredients").update({ cost_per_unit:costPerYield }).eq("id", sub.ingredient_id),
+      supabase.from("ingredients").update({ cost_per_unit:ingredientCostPerUnit }).eq("id", sub.ingredient_id),
       supabase.from("sub_recipes").update({ cost_per_unit:costPerYield }).eq("id", subId),
     ])
-    return { ingredientId:sub.ingredient_id, costPerYield }
+    return { ingredientId:sub.ingredient_id, costPerYield:ingredientCostPerUnit }
   }))
   const updatedSubIngIds = []
   for (const r of subResults) {
@@ -84,8 +127,16 @@ async function cascadeRecalc(updatedIngIds) {
     // products' PK is "sku", not "id" — and it has no "margin" column (Products.jsx computes
     // margin on the fly from cogs/price). Both were wrong here, so this cascade silently
     // no-op'd (PostgREST rejects unknown columns) and COGS never actually got recalculated
-    // after a PO payment.
+    // after a PO payment. Kept as its own call, deliberately not combined with needs_recalc
+    // below — PostgREST rejects an entire update if any single column in it doesn't exist, so
+    // bundling them would let a missing/not-yet-migrated needs_recalc column silently break
+    // this cogs write too, reintroducing exactly the bug this comment describes.
     await supabase.from("products").update({ cogs:Math.round(totalCost) }).eq("sku", productId)
+    // Best-effort: clears the "may be stale" flag voidPO() sets. Kept as its own call (not
+    // awaited into the same Promise.all chain as anything critical) — supabase-js resolves with
+    // an {error} field rather than throwing, so this just quietly no-ops until the needs_recalc
+    // migration has run, without affecting the cogs write above either way.
+    supabase.from("products").update({ needs_recalc:false }).eq("sku", productId)
   }))
 
   if (updatedSubIngIds.length) await cascadeRecalc(updatedSubIngIds)
@@ -159,6 +210,20 @@ function computeVoidPOChanges(po, ingMap) {
     ingMap[ing.id] = { ...ing, stock:newStock }
   }
   return { ingUpdates, movements }
+}
+
+// Voiding a Paid PO deliberately does NOT re-run cascadeRecalc (see voidPO's confirm text) — so
+// any product whose recipe touches one of the voided PO's ingredients may now show a cogs value
+// that still reflects the reversed purchase. Rather than silently leaving that invisible, flag
+// it so Profitability can show a "may be stale" badge; cascadeRecalc clears the flag the next
+// time it actually recomputes that product's cogs.
+async function flagNeedsRecalc(ingredientIds) {
+  const ids = [...new Set(ingredientIds)]
+  if (!ids.length) return
+  const { data: dishLines } = await supabase.from("recipes").select("product_id,ingredient_id").in("ingredient_id", ids)
+  const productIds = [...new Set((dishLines||[]).map(l => l.product_id).filter(Boolean))]
+  if (!productIds.length) return
+  await supabase.from("products").update({ needs_recalc:true }).in("sku", productIds)
 }
 
 export default function InvPO() {
@@ -424,6 +489,7 @@ export default function InvPO() {
       await Promise.all([
         persistPaidPOChanges(ingUpdates, movements),
         supabase.from("purchase_orders").update({ status:"Void" }).eq("id", po.id),
+        flagNeedsRecalc((po.po_items||[]).map(i=>i.ingredient_id).filter(Boolean)),
       ])
     } else {
       if (!confirm(`Void ${po.id}?`)) return
@@ -480,22 +546,13 @@ export default function InvPO() {
     if (validItems.some(i => (parseFloat(i.total_cost)||0) <= 0)) {
       alert("Every item needs a positive total cost"); return
     }
-    // Catch fat-finger entries (wrong zero count, decimal slip, etc.) before they poison
-    // this ingredient's WAC — compare against its existing cost, priced on the same unit basis.
+    // Catch fat-finger entries (wrong zero count, decimal slip, etc.) before they poison this
+    // ingredient's WAC — same check the line-item rows already show live; this is just the final
+    // safety net a user could otherwise click through without noticing on a fast submit.
     for (const item of validItems) {
       const ing = ingredients.find(i => i.id === item.ingredient_id)
-      if (!ing || !ing.cost_per_unit) continue
-      const qty = parseFloat(item.qty) || 0
-      const unitCost = qty > 0 ? (parseFloat(item.total_cost)||0) / qty : 0
-      const refUnitCost = ing.cost_per_unit * toBaseUnit(ing, 1, item.unit)
-      if (refUnitCost <= 0) continue
-      const ratio = unitCost / refUnitCost
-      // Extreme deviations are almost always the WRONG UNIT selected (e.g. the "kg" the unit
-      // dropdown defaults to, when the purchase was really gr/pcs) rather than a real price
-      // swing — this is exactly how Timun/Wortel/Bumbu Racik's cost_per_unit got poisoned by
-      // 500kg/20kg entries that were actually 500gr/20pcs. Block outright instead of a
-      // dismissible confirm() that's easy to click through without noticing the mistake.
-      if (ratio > 20 || ratio < 0.05) {
+      const { level, unitCost, refUnitCost } = priceOutlierCheck(ing, item.qty, item.unit, item.total_cost)
+      if (level === "block") {
         alert(
           `${ing.name}: harga ${fmt(unitCost)}/${item.unit} sangat jauh berbeda dari harga ` +
           `biasanya (~${fmt(refUnitCost)}/${item.unit}). Cek lagi unit yang dipilih (${item.unit}) — ` +
@@ -503,7 +560,7 @@ export default function InvPO() {
         )
         return
       }
-      if (ratio > 5 || ratio < 0.2) {
+      if (level === "warn") {
         const ok = confirm(
           `${ing.name}: harga ${fmt(unitCost)}/${item.unit} jauh berbeda dari harga biasanya ` +
           `(~${fmt(refUnitCost)}/${item.unit}). Lanjutkan?`
@@ -919,27 +976,43 @@ function POFormModal({ title, onSubmit, onClose, suppliers, ingredients, onRefre
             <div style={{ display:"grid", gridTemplateColumns:"2fr 80px 100px 130px 130px 36px", gap:6, marginBottom:6 }} className="po-items-header">
               {["INGREDIENT","QTY","UNIT","TOTAL HARGA","HARGA/UNIT",""].map((h,i)=><div key={i} style={{ fontSize:10, fontWeight:700, color:"var(--ink4)" }}>{h}</div>)}
             </div>
-            {poItems.map((item,i) => (
-              <div key={i} className="po-item-row" style={{ display:"grid", gridTemplateColumns:"2fr 80px 100px 130px 130px 36px", gap:6, marginBottom:8 }}>
-                <SearchSelect
-                  options={ingredients}
-                  value={item.ingredient_id}
-                  onChange={v=>updatePOItem(i,"ingredient_id",v)}
-                  placeholder="— Search ingredient —"
-                  labelKey="name" valueKey="id"
-                  renderOption={o=><span>{o.name} <span style={{fontSize:10,color:"var(--ink5)"}}>({o.unit})</span></span>}
-                />
-                <input type="number" min="0" value={item.qty} onChange={e=>updatePOItem(i,"qty",e.target.value)} className="bo-input" placeholder="0" />
-                <select value={item.unit} onChange={e=>updatePOItem(i,"unit",e.target.value)} className="bo-select">
-                  {getUnits(item.ingredient_id).map(u=><option key={u}>{u}</option>)}
-                </select>
-                <input type="number" min="0" value={item.total_cost} onChange={e=>updatePOItem(i,"total_cost",e.target.value)} className="bo-input" placeholder="Total harga" />
-                <div style={{ display:"flex", alignItems:"center", padding:"0 10px", background:"#F4F5F7", borderRadius:"var(--r)", fontSize:12, color:"var(--ink3)", fontStyle:"italic", minWidth:0 }}>
-                  {item.unit_cost ? fmt2(parseFloat(item.unit_cost)) + "/" + (item.unit||"unit") : "—"}
+            {poItems.map((item,i) => {
+              const ing = ingredients.find(x=>x.id===item.ingredient_id)
+              const outlier = priceOutlierCheck(ing, item.qty, item.unit, item.total_cost)
+              const rowStyle = outlier.level==="block"
+                ? { background:"#FDECEA", border:"1px solid #DE350B", borderRadius:"var(--r)", padding:4 }
+                : outlier.level==="warn"
+                ? { background:"#FFF7E6", border:"1px solid #FFAB00", borderRadius:"var(--r)", padding:4 }
+                : {}
+              return (
+              <div key={i}>
+                <div className="po-item-row" style={{ display:"grid", gridTemplateColumns:"2fr 80px 100px 130px 130px 36px", gap:6, marginBottom:outlier.level?2:8, ...rowStyle }}>
+                  <SearchSelect
+                    options={ingredients}
+                    value={item.ingredient_id}
+                    onChange={v=>updatePOItem(i,"ingredient_id",v)}
+                    placeholder="— Search ingredient —"
+                    labelKey="name" valueKey="id"
+                    renderOption={o=><span>{o.name} <span style={{fontSize:10,color:"var(--ink5)"}}>({o.unit})</span></span>}
+                  />
+                  <input type="number" min="0" value={item.qty} onChange={e=>updatePOItem(i,"qty",e.target.value)} className="bo-input" placeholder="0" />
+                  <select value={item.unit} onChange={e=>updatePOItem(i,"unit",e.target.value)} className="bo-select">
+                    {getUnits(item.ingredient_id).map(u=><option key={u}>{u}</option>)}
+                  </select>
+                  <input type="number" min="0" value={item.total_cost} onChange={e=>updatePOItem(i,"total_cost",e.target.value)} className="bo-input" placeholder="Total harga" />
+                  <div style={{ display:"flex", alignItems:"center", padding:"0 10px", background:"#F4F5F7", borderRadius:"var(--r)", fontSize:12, color:"var(--ink3)", fontStyle:"italic", minWidth:0 }}>
+                    {item.unit_cost ? fmt2(parseFloat(item.unit_cost)) + "/" + (item.unit||"unit") : "—"}
+                  </div>
+                  <button onClick={()=>removePOItem(i)} className="bo-btn bo-btn-danger bo-btn-sm" style={{ padding:"0 10px" }}>✕</button>
                 </div>
-                <button onClick={()=>removePOItem(i)} className="bo-btn bo-btn-danger bo-btn-sm" style={{ padding:"0 10px" }}>✕</button>
+                {outlier.level && (
+                  <div style={{ fontSize:11, color:outlier.level==="block"?"#DE350B":"#B45309", marginBottom:8, paddingLeft:4 }}>
+                    ⚠ {ing?.name}: harga {fmt2(outlier.unitCost)}/{item.unit} {outlier.level==="block"?"sangat ":""}jauh berbeda dari harga biasanya (~{fmt2(outlier.refUnitCost)}/{item.unit}) — cek unit yang dipilih ({item.unit}).
+                  </div>
+                )}
               </div>
-            ))}
+              )
+            })}
             <div style={{ display:"flex", justifyContent:"space-between", padding:"12px 16px", background:"var(--surface)", borderRadius:"var(--r)", marginTop:8 }}>
               <span style={{ fontWeight:700 }}>Grand Total</span>
               <span style={{ fontSize:18, fontWeight:900, color:"var(--brand)" }}>{fmt2(grandTotal)}</span>
