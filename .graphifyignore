@@ -1,0 +1,4 @@
+# Capacitor build mirror — hashed filenames regenerate every `npx cap sync`,
+# churning graphify's diff with duplicate/minified copies of src/ that carry
+# no new signal.
+android/app/src/main/assets/public/
