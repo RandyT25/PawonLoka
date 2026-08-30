@@ -153,6 +153,14 @@ export default function StaffPortal() {
   const [stationStaff, setStationStaff] = useState({})
   const [allStaff,     setAllStaff]     = useState([])
 
+  // Use ingredient_id (not the sub_recipes row's own id) as the option value — that's the
+  // id staff_submissions/stock_movements actually deduct against. See RecipeEditor.jsx's
+  // `all` list for the same fix applied there.
+  const subRecipeOptions = subRecipes.map(s => {
+    const ing = ingredientsById[s.ingredient_id]
+    return { id: s.ingredient_id||s.id, name:s.name, unit: ing?.unit||s.yield_unit||s.unit||"gr", cost_per_unit: ing?.cost_per_unit||s.cost_per_unit||0 }
+  })
+
   useEffect(() => { loadStaff(); loadData() }, [])
   useEffect(() => { if (station) loadData() }, [station])
 
@@ -274,13 +282,13 @@ export default function StaffPortal() {
   }
 
   async function submitWaste() {
-    const ing = ingredients.find(i=>i.id===wasteForm.ingredient_id)
+    const ing = ingredientsById[wasteForm.ingredient_id]
     if (!ing||!wasteForm.qty) { alert("Select ingredient and quantity"); return }
     await submit("waste", { ingredient_id:ing.id, ingredient_name:ing.name, qty:parseFloat(wasteForm.qty), unit:ing.unit, reason:wasteForm.reason, notes:wasteForm.notes, date:wasteForm.date||new Date().toISOString().slice(0,10), estimated_cost:(parseFloat(wasteForm.qty)||0)*(ing.cost_per_unit||0) })
   }
 
   async function submitConsumption() {
-    const ing = ingredients.find(i=>i.id===consumptionForm.ingredient_id)
+    const ing = ingredientsById[consumptionForm.ingredient_id]
     if (!ing||!consumptionForm.qty) { alert("Select ingredient and quantity"); return }
     await submit("consumption", { ingredient_id:ing.id, ingredient_name:ing.name, qty:parseFloat(consumptionForm.qty), unit:ing.unit, notes:consumptionForm.notes, date:consumptionForm.date||new Date().toISOString().slice(0,10), estimated_cost:(parseFloat(consumptionForm.qty)||0)*(ing.cost_per_unit||0) })
   }
@@ -531,12 +539,12 @@ export default function StaffPortal() {
         </div>
         <div style={s.card}>
           <label style={s.label}>Ingredient / Sub-Recipe *</label>
-          <SearchableSelect options={[...ingredients, ...subRecipes.map(s=>({id:s.id,name:s.name,unit:s.unit||"gr",cost_per_unit:s.cost_per_unit||0}))].sort((a,b)=>a.name.localeCompare(b.name))} value={wasteForm.ingredient_id} onChange={v=>setWasteForm(f=>({...f,ingredient_id:v}))} placeholder="— Search ingredient or sub-recipe —" />
+          <SearchableSelect options={[...ingredients, ...subRecipeOptions].sort((a,b)=>a.name.localeCompare(b.name))} value={wasteForm.ingredient_id} onChange={v=>setWasteForm(f=>({...f,ingredient_id:v}))} placeholder="— Search ingredient or sub-recipe —" />
           <label style={{ ...s.label, marginTop:14 }}>Quantity *</label>
           <input type="number" inputMode="decimal" value={wasteForm.qty} onChange={e=>setWasteForm(f=>({...f,qty:e.target.value}))} style={s.input} placeholder="0" />
           {wasteForm.ingredient_id && wasteForm.qty && (
             <div style={{ marginTop:8, padding:"9px 13px", background:"#fff0ed", borderRadius:10, fontSize:13, color:"#DE350B", fontWeight:700 }}>
-              Est. Loss: Rp {fmt((parseFloat(wasteForm.qty)||0)*(ingredients.find(i=>i.id===wasteForm.ingredient_id)?.cost_per_unit||0))}
+              Est. Loss: Rp {fmt((parseFloat(wasteForm.qty)||0)*(ingredientsById[wasteForm.ingredient_id]?.cost_per_unit||0))}
             </div>
           )}
           <label style={{ ...s.label, marginTop:14 }}>Reason *</label>
@@ -569,12 +577,12 @@ export default function StaffPortal() {
         </div>
         <div style={s.card}>
           <label style={s.label}>Ingredient / Sub-Recipe *</label>
-          <SearchableSelect options={[...ingredients, ...subRecipes.map(s=>({id:s.id,name:s.name,unit:s.unit||"gr",cost_per_unit:s.cost_per_unit||0}))].sort((a,b)=>a.name.localeCompare(b.name))} value={consumptionForm.ingredient_id} onChange={v=>setConsumptionForm(f=>({...f,ingredient_id:v}))} placeholder="— Search ingredient or sub-recipe —" />
+          <SearchableSelect options={[...ingredients, ...subRecipeOptions].sort((a,b)=>a.name.localeCompare(b.name))} value={consumptionForm.ingredient_id} onChange={v=>setConsumptionForm(f=>({...f,ingredient_id:v}))} placeholder="— Search ingredient or sub-recipe —" />
           <label style={{ ...s.label, marginTop:14 }}>Quantity *</label>
           <input type="number" inputMode="decimal" value={consumptionForm.qty} onChange={e=>setConsumptionForm(f=>({...f,qty:e.target.value}))} style={s.input} placeholder="0" />
           {consumptionForm.ingredient_id && consumptionForm.qty && (
             <div style={{ marginTop:8, padding:"9px 13px", background:"#fff8e6", borderRadius:10, fontSize:13, color:"#B45309", fontWeight:700 }}>
-              Est. Cost: Rp {fmt((parseFloat(consumptionForm.qty)||0)*(ingredients.find(i=>i.id===consumptionForm.ingredient_id)?.cost_per_unit||0))}
+              Est. Cost: Rp {fmt((parseFloat(consumptionForm.qty)||0)*(ingredientsById[consumptionForm.ingredient_id]?.cost_per_unit||0))}
             </div>
           )}
           <label style={{ ...s.label, marginTop:14 }}>Notes</label>
