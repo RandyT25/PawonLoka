@@ -17,12 +17,13 @@ const TYPE_COLORS = {
   size:   { bg:"#FFF7E6", color:"#FF8B00" },
 }
 const EMPTY_MOD = { name:"", type:"single", required:false, linked_cats:[], linked_products:[] }
-const EMPTY_OPT = { name:"", price:0 }
+const EMPTY_OPT = { name:"", price:0, ingredient_id:"", qty:1 }
 
 export default function Modifiers() {
   const [modifiers,  setModifiers]  = useState([])
   const [categories, setCategories] = useState([])
   const [products,   setProducts]   = useState([])
+  const [ingredients,setIngredients]= useState([])
   const [prodSearch, setProdSearch]  = useState("")
   const [loading,    setLoading]    = useState(true)
   const [modal,      setModal]      = useState(null)
@@ -35,14 +36,16 @@ export default function Modifiers() {
 
   async function load() {
     setLoading(true)
-    const [{ data:mods }, { data:cats }, { data:prods }] = await Promise.all([
+    const [{ data:mods }, { data:cats }, { data:prods }, { data:ings }] = await Promise.all([
       supabase.from("modifier_groups").select("*").order("name"),
       supabase.from("categories").select("*").order("sort"),
       supabase.from("products").select("sku,name,cat,active").eq("active",true).order("name"),
+      supabase.from("ingredients").select("id,name,unit").order("name"),
     ])
     setModifiers(mods||[])
     setCategories(cats||[])
     setProducts(prods||[])
+    setIngredients(ings||[])
     setLoading(false)
   }
 
@@ -72,7 +75,7 @@ export default function Modifiers() {
   async function save() {
     if (!form.name.trim()) return
     setSaving(true)
-    const validOpts = options.filter(o=>o.name.trim()).map(o=>({...o, price:parseFloat(o.price)||0}))
+    const validOpts = options.filter(o=>o.name.trim()).map(o=>({...o, price:parseFloat(o.price)||0, ingredient_id: o.ingredient_id||null, qty: parseFloat(o.qty)||1}))
     const payload = {
       name:     form.name.trim(),
       type:     form.type,
@@ -189,13 +192,18 @@ export default function Modifiers() {
                   <label className="bo-label" style={{ marginBottom:0 }}>Options</label>
                   <button onClick={addOption} className="bo-btn bo-btn-ghost bo-btn-sm">+ Add Option</button>
                 </div>
-                <div style={{ display:"grid", gridTemplateColumns:"1fr 130px 36px", gap:8, marginBottom:6 }}>
-                  {["OPTION NAME","PRICE (+/-)",""].map((h,i)=><div key={i} style={{ fontSize:10, fontWeight:700, color:"var(--ink4)" }}>{h}</div>)}
+                <div style={{ display:"grid", gridTemplateColumns:"1fr 90px 140px 60px 36px", gap:8, marginBottom:6 }}>
+                  {["OPTION NAME","PRICE (+/-)","LINK INGREDIENT","QTY",""].map((h,i)=><div key={i} style={{ fontSize:10, fontWeight:700, color:"var(--ink4)" }}>{h}</div>)}
                 </div>
                 {options.map((opt,i)=>(
-                  <div key={i} style={{ display:"grid", gridTemplateColumns:"1fr 130px 36px", gap:8, marginBottom:8 }}>
+                  <div key={i} style={{ display:"grid", gridTemplateColumns:"1fr 90px 140px 60px 36px", gap:8, marginBottom:8 }}>
                     <input value={opt.name} onChange={e=>updateOption(i,"name",e.target.value)} className="bo-input" placeholder="e.g. Extra Spicy" />
-                    <input type="number" value={opt.price||""} onChange={e=>updateOption(i,"price",e.target.value)} onFocus={e=>{if(e.target.value==="0")e.target.select()}} className="bo-input" placeholder="0 = free" />
+                    <input type="number" value={opt.price||""} onChange={e=>updateOption(i,"price",e.target.value)} onFocus={e=>{if(e.target.value==="0")e.target.select()}} className="bo-input" placeholder="0" />
+                    <select value={opt.ingredient_id||""} onChange={e=>updateOption(i,"ingredient_id",e.target.value)} className="bo-select" style={{ fontSize:12, padding:"0 6px" }}>
+                      <option value="">-- None --</option>
+                      {ingredients.map(ing=><option key={ing.id} value={ing.id}>{ing.name} ({ing.unit})</option>)}
+                    </select>
+                    <input type="number" value={opt.qty||""} onChange={e=>updateOption(i,"qty",e.target.value)} disabled={!opt.ingredient_id} className="bo-input" placeholder="1" min="0" step="any" />
                     <button onClick={()=>removeOption(i)} className="bo-btn bo-btn-danger bo-btn-sm" style={{ padding:"0 10px" }}>✕</button>
                   </div>
                 ))}

@@ -35,7 +35,7 @@ export default function InvOpname() {
   }
 
   async function submitOpname() {
-    if (!confirm("Submit stock count? Stock will be adjusted by the counted variance (actual − system) on top of live stock.")) return
+    if (!confirm("Submit stock count? Each stock value will be replaced by the physical count.")) return
     setSubmitting(true)
     try {
       const items = activeCount.map(item => ({
@@ -44,16 +44,22 @@ export default function InvOpname() {
       }))
       const totalVariance = items.reduce((a,i) => a+i.value_diff, 0)
       const sessionId = "OPN-"+String(sessions.length+1).padStart(3,"0")
+      const fresh = await Promise.all(items.map(item => supabase.from("ingredients").select("stock").eq("id", item.ingredient_id).maybeSingle()))
+      const changed = fresh.find((r, idx) => Number(r.data?.stock ?? items[idx].system_qty) !== Number(items[idx].system_qty))
+      if (changed) throw new Error("Stock changed while this count was open. Reload and recount before submitting.")
       const { error:opnErr } = await supabase.from("stock_opname").insert({
         id: sessionId, date: new Date().toISOString().slice(0,10),
         status:"Completed", items, total_variance:totalVariance
       })
       if (opnErr) throw opnErr
-      // Apply the counted DIFFERENCE on top of current live stock (not an overwrite), so any
-      // activity that happened while this session was open isn't erased.
+      // A physical count is authoritative.  Do not add a stale difference to current stock:
+      // require staff to refresh if a sale/PO changed a line during the count.
       for (const item of items) {
         const { data:freshIng } = await supabase.from("ingredients").select("stock").eq("id", item.ingredient_id).maybeSingle()
-        const newStock = Math.max(0, (freshIng?.stock ?? item.system_qty) + item.diff)
+        if (Number(freshIng?.stock ?? item.system_qty) !== Number(item.system_qty)) {
+          throw new Error(`Stock ${item.ingredient_name} berubah sejak hitung dimulai. Muat ulang lalu hitung kembali.`)
+        }
+        const newStock = Math.max(0, item.actual_qty)
         const { error:updErr } = await supabase.from("ingredients").update({ stock:newStock }).eq("id", item.ingredient_id)
         if (updErr) throw updErr
         if (item.diff !== 0) {
@@ -61,7 +67,7 @@ export default function InvOpname() {
             id:"MOV-"+Date.now()+"-"+Math.random().toString(36).slice(2,6),
             type:"Adjustment", ingredient_id:item.ingredient_id, ingredient_name:item.ingredient_name,
             qty:item.diff, unit:item.unit, ref:sessionId,
-            note:"Stock opname "+sessionId,
+            note:"Stock opname "+sessionId+` (${item.system_qty} → ${newStock})`,
             date:new Date().toISOString().slice(0,10),
             time:new Date().toLocaleTimeString("id-ID",{hour:"2-digit",minute:"2-digit"})
           })

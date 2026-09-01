@@ -4,7 +4,7 @@ import { fmt } from '../../shared/constants'
 import { qr } from '../../lib/quickRead'
 import { dbWrite } from '../../shared/dbWrite'
 import { offlineStore } from '../../lib/offlineStore'
-import { applyRecipeStockMovement } from '../../shared/stockMovements'
+import { applyRecipeStockMovement, reverseOrderStockMovements } from '../../shared/stockMovements'
 
 export default function VoidModal({ onClose, managerPin = '9999' }) {
   const [step, setStep] = useState('search')
@@ -16,6 +16,7 @@ export default function VoidModal({ onClose, managerPin = '9999' }) {
   const [reason, setReason] = useState('')
   const [refundType, setRefundType] = useState('full')
   const [refundAmount, setRefundAmount] = useState('')
+  const [returnedQty, setReturnedQty] = useState({})
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const submittingRef = useRef(false)
@@ -61,6 +62,10 @@ export default function VoidModal({ onClose, managerPin = '9999' }) {
     const amount = refundType === 'full' ? selected.total : parseFloat(refundAmount) || 0
     if (refundType === 'partial' && amount <= 0) { setError('Masukkan jumlah refund'); return }
     if (refundType === 'partial' && amount > selected.total) { setError('Melebihi total order'); return }
+    const returnedItems = (selected.items || []).flatMap((item, index) => {
+      const qty = Math.max(0, Math.min(Number(item.qty || 0), Number(returnedQty[index] || 0)))
+      return qty ? [{ ...item, qty }] : []
+    })
 
     submittingRef.current = true
     setLoading(true)
@@ -79,7 +84,10 @@ export default function VoidModal({ onClose, managerPin = '9999' }) {
     // and a partial refund doesn't tell us which physical items came back, so it's left alone
     // rather than guessing — this used to be silently missing entirely, understating stock forever.
     if (refundType === 'full' && selected.status === 'Paid' && Array.isArray(selected.items)) {
-      await applyRecipeStockMovement(selected.items, { sign: 1, type: 'Void', ref: selected.id })
+      const exact = await reverseOrderStockMovements(selected.id, { actor:'Void modal' })
+      if (!exact.reversed) await applyRecipeStockMovement(selected.items, { sign: 1, type: 'Void', ref: selected.id, orderId:selected.id, actor:'Void modal' })
+    } else if (refundType === 'partial' && returnedItems.length) {
+      await applyRecipeStockMovement(returnedItems, { sign: 1, type: 'Refund', ref:selected.id, orderId:selected.id, actor:'Void modal' })
     }
 
     // Voiding/refunding a still-Open bill frees up its table — the floor plan's occupancy
@@ -200,6 +208,23 @@ export default function VoidModal({ onClose, managerPin = '9999' }) {
                       style={S.quickBtn}>{pct}% = {fmt(Math.round(selected.total*pct/100))}</button>
                   ))}
                 </div>
+              </div>
+            )}
+
+            {refundType === 'partial' && Array.isArray(selected.items) && (
+              <div style={{ marginBottom:14 }}>
+                <div style={S.label}>Item dikembalikan ke stok (opsional)</div>
+                <div style={{ border:'1px solid #E2E8F0', borderRadius:8, overflow:'hidden' }}>
+                  {selected.items.map((item, index) => (
+                    <div key={index} style={{ display:'flex', gap:8, alignItems:'center', padding:8, borderBottom:'1px solid #F1F5F9' }}>
+                      <span style={{ flex:1, fontSize:12 }}>{item.name} × {item.qty}</span>
+                      <input type="number" min="0" max={item.qty} value={returnedQty[index] || ''}
+                        onChange={e=>setReturnedQty(prev=>({ ...prev, [index]:e.target.value }))}
+                        placeholder="Qty" style={{ ...S.input, width:70, padding:6 }} />
+                    </div>
+                  ))}
+                </div>
+                <div style={{ fontSize:11, color:'#64748B', marginTop:5 }}>Kosongkan semua untuk refund finansial tanpa stok.</div>
               </div>
             )}
 

@@ -8,6 +8,7 @@ import InvOpname      from "./inventory/InvOpname"
 import InvWaste       from "./inventory/InvWaste"
 import InvStaffConsumption from "./inventory/InvStaffConsumption"
 import InvMovements   from "./inventory/InvMovements"
+import InvRebuildPreview from "./inventory/InvRebuildPreview"
 
 const TABS = [
   { id:"inv-overview",     label:"Overview",         icon:"📦" },
@@ -20,6 +21,7 @@ const TABS = [
   { id:"inv-waste",        label:"Waste Recording",  icon:"🗑" },
   { id:"inv-consumption",  label:"Staff Consumption",icon:"🍽" },
   { id:"inv-movements",    label:"Movement History", icon:"📋" },
+  { id:"inv-rebuild",      label:"Rebuild Preview",  icon:"🧭" },
 ]
 
 const SCREENS = {
@@ -33,6 +35,7 @@ const SCREENS = {
   "inv-waste":       InvWaste,
   "inv-consumption": InvStaffConsumption,
   "inv-movements":   InvMovements,
+  "inv-rebuild":     InvRebuildPreview,
 }
 
 export default function Inventory({ initialTab, onNavChange }) {

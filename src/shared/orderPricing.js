@@ -2,11 +2,13 @@
 // table's items/subtotal/tax/discount/total must go through this function so
 // those fields can never be written out of sync with each other.
 export function computeOrderTotals({ items, discountPct = 0, promoDisc = 0, pointsValue = 0, taxRate = 0 }) {
+  const grossSubtotal = items.reduce((s, i) => s + (i.price * i.qty), 0)
   const subtotal = items.reduce((s, i) => s + (i.price - (i.itemDisc || 0)) * i.qty, 0)
-  const discAmt = discountPct ? Math.round(subtotal * discountPct / 100) : 0
+  const discAmt = discountPct ? Math.round(grossSubtotal * discountPct / 100) : 0
   const discount = discAmt + promoDisc + pointsValue
-  const tax = Math.round((subtotal - discount) * taxRate)
-  const total = subtotal - discount + tax
+  const netBeforeTax = Math.max(0, subtotal - discount)
+  const tax = Math.round(netBeforeTax * taxRate)
+  const total = netBeforeTax + tax
   return { items, subtotal, tax, discount, total }
 }
 

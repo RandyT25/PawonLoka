@@ -40,7 +40,11 @@ export default function Rekonsiliasi() {
 
     let q = supabase.from("orders").select("*").gte("created_at", fromStr)
     if (toStr) q = q.lte("created_at", toStr)
-    const { data: orders, error } = await q.order("created_at", { ascending: false })
+    const [{ data: orders, error }, { data: shifts }, { data: cashLogs }] = await Promise.all([
+      q.order("created_at", { ascending: false }),
+      supabase.from("shifts").select("id,date,float_open,cash_sales,created_at").gte("created_at", fromStr),
+      supabase.from("cash_logs").select("type,amount,date").gte("date", fromStr.slice(0,10)),
+    ])
 
     if (error) { console.error("Rekonsiliasi query error:", error.message); setLoading(false); return }
 
@@ -49,6 +53,22 @@ export default function Rekonsiliasi() {
       .from("reconciliations").select("*").gte("created_at", fromStr)
     const reconMap = {}
     ;(recons || []).forEach(r => { reconMap[r.recon_no] = r })
+
+    // Build per-day cash flow data from shifts + cash_logs
+    // Expected Cash = float_open + cashSales + topups - expenses + returns
+    const cashFlowByDay = {}
+    for (const sh of shifts || []) {
+      const day = sh.date || sh.created_at?.slice(0,10) || "?"
+      if (!cashFlowByDay[day]) cashFlowByDay[day] = { float_open: 0, expenses: 0, topups: 0, returns: 0 }
+      cashFlowByDay[day].float_open += (sh.float_open || 0)
+    }
+    for (const log of cashLogs || []) {
+      const day = log.date || "?"
+      if (!cashFlowByDay[day]) cashFlowByDay[day] = { float_open: 0, expenses: 0, topups: 0, returns: 0 }
+      if (log.type === "expense") cashFlowByDay[day].expenses += (log.amount || 0)
+      else if (log.type === "topup") cashFlowByDay[day].topups += (log.amount || 0)
+      else if (log.type === "return") cashFlowByDay[day].returns += (log.amount || 0)
+    }
 
     // Group PAID orders by date × payment method
     const groups = {}
@@ -66,6 +86,12 @@ export default function Rekonsiliasi() {
     const rows = Object.values(groups).map(g => {
       const recon_no = `STL/${g.date.replace(/-/g,"").slice(2)}/${g.pay.replace(/[^A-Za-z]/g,"").slice(0,3).toUpperCase()}`
       const existing = reconMap[recon_no]
+      // Compute expected cash for Cash rows using the full drawer formula
+      let expected_cash = null
+      if (g.pay === "Cash") {
+        const flow = cashFlowByDay[g.date] || { float_open:0, expenses:0, topups:0, returns:0 }
+        expected_cash = flow.float_open + g.amount + flow.topups - flow.expenses + flow.returns
+      }
       return {
         id:             existing?.id || null,
         recon_no,
@@ -75,6 +101,7 @@ export default function Rekonsiliasi() {
         outlet:         "PawonLoka",
         amount:         g.amount,
         orders_count:   g.count,
+        expected_cash,
         status:         existing?.status || "unreconciled",
         reconciled_at:  existing?.reconciled_at || null,
         reconciled_by:  existing?.reconciled_by || null,
@@ -202,12 +229,16 @@ export default function Rekonsiliasi() {
                 <th>KASIR</th>
                 <th>OUTLET</th>
                 <th>JUMLAH</th>
+                <th title="Modal + Penjualan Kas + Topup - Pengeluaran + Retur">EKSPEKTASI KAS</th>
+                <th title="Ekspektasi - Aktual (hanya Kas)">SELISIH</th>
                 <th>STATUS</th>
                 <th style={{ width:40 }}></th>
               </tr>
             </thead>
             <tbody>
-              {filtered.map((r,i)=>(
+              {filtered.map((r,i)=>{
+                const variance = r.expected_cash != null ? r.expected_cash - r.amount : null
+                return (
                 <tr key={i}>
                   <td style={{ fontFamily:"monospace", fontSize:12, fontWeight:700 }}>{r.recon_no}</td>
                   <td style={{ fontSize:12 }}>{r.reconciled_at ? fmtDate(r.reconciled_at) : "—"}</td>
@@ -216,6 +247,12 @@ export default function Rekonsiliasi() {
                   <td style={{ fontSize:13 }}>{r.cashier_name}</td>
                   <td style={{ fontSize:12 }}>{r.outlet}</td>
                   <td style={{ fontSize:13, fontWeight:700 }}>{fmt(r.amount)}</td>
+                  <td style={{ fontSize:13, fontWeight:700, color:"#0052CC" }}>
+                    {r.expected_cash != null ? fmt(r.expected_cash) : "—"}
+                  </td>
+                  <td style={{ fontSize:13, fontWeight:700, color: variance == null ? "var(--ink5)" : variance < 0 ? "#DE350B" : "#00875A" }}>
+                    {variance == null ? "—" : (variance >= 0 ? "+" : "") + fmt(variance)}
+                  </td>
                   <td>
                     <span style={{ fontSize:11, fontWeight:700, padding:"3px 10px", borderRadius:10, whiteSpace:"nowrap",
                       background: r.status==="reconciled" ? "#E3FCEF" : "#FFEBE6",
@@ -230,9 +267,9 @@ export default function Rekonsiliasi() {
                     </button>
                   </td>
                 </tr>
-              ))}
+              )})}
               {filtered.length===0 && (
-                <tr><td colSpan={9} style={{ textAlign:"center", color:"var(--ink5)", padding:"40px 0" }}>
+                <tr><td colSpan={11} style={{ textAlign:"center", color:"var(--ink5)", padding:"40px 0" }}>
                   {loading ? "Loading..." : "Tidak ada data rekonsiliasi"}
                 </td></tr>
               )}
@@ -273,7 +310,18 @@ export default function Rekonsiliasi() {
                 <span style={{ color:"var(--ink4)", fontWeight:600 }}>Tutup Kasir</span><span>{editModal.date || "—"}</span>
                 <span style={{ color:"var(--ink4)", fontWeight:600 }}>Metode Bayar</span><span style={{ fontWeight:700 }}>{editModal.payment_method}</span>
                 <span style={{ color:"var(--ink4)", fontWeight:600 }}>Kasir</span><span>{editModal.cashier_name}</span>
-                <span style={{ color:"var(--ink4)", fontWeight:600 }}>Jumlah</span><span style={{ fontWeight:900, color:"var(--brand)", fontSize:15 }}>{fmt(editModal.amount)}</span>
+                <span style={{ color:"var(--ink4)", fontWeight:600 }}>Penjualan Kas</span><span style={{ fontWeight:900, color:"var(--brand)", fontSize:15 }}>{fmt(editModal.amount)}</span>
+                {editModal.expected_cash != null && (<>
+                  <span style={{ color:"var(--ink4)", fontWeight:600 }}>Ekspektasi Kas</span>
+                  <span style={{ fontWeight:700, color:"#0052CC" }}>{fmt(editModal.expected_cash)}
+                    <span style={{ fontSize:11, color:"var(--ink5)", fontWeight:400, marginLeft:6 }}>= Modal + Penjualan + Topup − Pengeluaran + Retur</span>
+                  </span>
+                  <span style={{ color:"var(--ink4)", fontWeight:600 }}>Selisih</span>
+                  <span style={{ fontWeight:900, fontSize:14, color: (editModal.expected_cash - editModal.amount) < 0 ? "#DE350B" : "#00875A" }}>
+                    {(editModal.expected_cash - editModal.amount) >= 0 ? "+" : ""}{fmt(editModal.expected_cash - editModal.amount)}
+                    {(editModal.expected_cash - editModal.amount) < 0 && <span style={{ fontSize:11, marginLeft:6, fontWeight:600 }}>⚠ KAS KURANG</span>}
+                  </span>
+                </>)}
               </div>
 
               <div style={{ marginBottom:12 }}>

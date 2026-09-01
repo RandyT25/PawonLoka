@@ -1,5 +1,6 @@
 import { useState, useEffect, useMemo, Fragment } from "react"
 import { supabase } from "../../lib/supabase"
+import { explodeOrderPayments } from "../../shared/orderPricing"
 import ClosingReport from "./ClosingReport"
 import CashLog from "./CashLog"
 import { exportPDF, exportExcel } from "./exportUtils"
@@ -227,9 +228,10 @@ export default function Accounting() {
   }
 
   // ── CALCULATED FINANCIALS ─────────────────────────────
+  // `orders.total` is already post-discount, so it is the realised revenue.
   const grossRevenue   = orders.reduce((a,o)=>a+(o.total||0),0)
   const totalDiscount  = orders.reduce((a,o)=>a+(o.discount||0),0)
-  const netRevenue     = grossRevenue - totalDiscount
+  const netRevenue     = grossRevenue
   const totalCOGS      = orders.reduce((a,o)=>a+(o.cogs||0),0)
   const grossProfit    = netRevenue - totalCOGS
   const grossMargin    = netRevenue>0 ? Math.round((grossProfit/netRevenue)*100) : 0
@@ -347,8 +349,9 @@ export default function Accounting() {
   const netMargin  = netRevenue>0 ? Math.round((netProfit/netRevenue)*100) : 0
 
   // Cash flow
-  const cashIn   = orders.filter(o=>o.payment==="Cash").reduce((a,o)=>a+(o.total||0),0)
-  const qrisIn   = orders.filter(o=>o.payment!=="Cash").reduce((a,o)=>a+(o.total||0),0)
+  const paymentBreakdown = orders.flatMap(explodeOrderPayments)
+  const cashIn   = paymentBreakdown.filter(p=>p.method==="Cash").reduce((a,p)=>a+p.amount,0)
+  const qrisIn   = paymentBreakdown.filter(p=>p.method!=="Cash").reduce((a,p)=>a+p.amount,0)
   const cashOut  = poTotal + salaryTotal + manualExpenses.filter(e=>e.payment_method==="Cash").reduce((a,e)=>a+(e.amount||0),0)
   // Was missing qrisIn — a QRIS/transfer-heavy day showed a big negative "Saldo Akhir" here
   // even though the KAS MASUK card right above it already displays cashIn+qrisIn as inflow.
