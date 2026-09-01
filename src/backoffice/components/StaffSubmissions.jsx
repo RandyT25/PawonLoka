@@ -319,15 +319,17 @@ export default function StaffSubmissions() {
     setProcessing(false)
   }
 
-  const byStatus = (st) => submissions.filter(s => s.status === st)
+  const byStatus = (st) => submissions.filter(s => s.status === st && s.type !== "requisition")
   const pending  = byStatus("pending")
   const approved = byStatus("approved")
   const rejected = byStatus("rejected")
+  const requests = submissions.filter(s => s.type === "requisition")
 
   const filtered = submissions.filter(s => {
+    if (statusFilter === "requests") return s.type === "requisition"
     const matchStatus = statusFilter === "all" || s.status === statusFilter
     const matchType   = typeFilter === "all" || s.type === typeFilter
-    return matchStatus && matchType
+    return matchStatus && matchType && s.type !== "requisition"
   })
 
   useEffect(() => {
@@ -672,8 +674,8 @@ export default function StaffSubmissions() {
 
   async function bulkApprove() {
     const ids = [...selected]
-    const targets = submissions.filter(s => ids.includes(s.id) && s.status==="pending")
-    if (targets.length === 0) { alert("No approvable submissions selected (only pending items can be approved)."); return }
+    const targets = submissions.filter(s => ids.includes(s.id) && s.status==="pending" && s.type!=="requisition")
+    if (targets.length === 0) { alert("No approvable submissions selected."); return }
     const warning = "Approve and apply "+targets.length+" selected submission"+(targets.length>1?"s":"")+"?"
     if (!(await askConfirm(warning))) return
     setProcessing(true)
@@ -761,6 +763,7 @@ export default function StaffSubmissions() {
       <div style={{ display:"flex", alignItems:"stretch", gap:10, marginBottom:14, flexWrap:"wrap" }}>
         {[
           ["pending",  "Pending",  "🕐", pending.length,  "amber"],
+          ["requests", "Requests", "🛒", requests.length, "blue"],
           ["approved", "Approved", "✅", approved.length, "green"],
           ["rejected", "Rejected", "❌", rejected.length, "red"],
         ].map(([key,label,icon,count,color]) => {
@@ -852,7 +855,7 @@ export default function StaffSubmissions() {
                       <div style={{ display:"flex", gap:4 }}>
                         <button onClick={()=>openViewModal(s)} className="bo-btn bo-btn-ghost bo-btn-sm">View</button>
                         <button onClick={()=>openEdit(s)} className="bo-btn bo-btn-ghost bo-btn-sm" style={{ color:"var(--brand)" }}>Edit</button>
-                        {s.status==="pending" && <>
+                        {s.status==="pending" && s.type!=="requisition" && <>
                           <button onClick={()=>approve(s)} disabled={processing} className="bo-btn bo-btn-sm" style={{ background:"var(--green-lt)", color:"var(--green)", border:"none", cursor:"pointer", borderRadius:"var(--r)", padding:"5px 11px", fontSize:12, fontWeight:600 }}>Approve</button>
                           <button onClick={()=>reject(s)} disabled={processing} className="bo-btn bo-btn-danger bo-btn-sm">Reject</button>
                         </>}
