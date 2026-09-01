@@ -843,7 +843,7 @@ export default function StaffSubmissions() {
                     <td style={{ fontSize:12, color:"var(--ink4)" }}>{summary}</td>
                     <td>
                       <div style={{ display:"flex", flexDirection:"column", gap:4, alignItems:"flex-start" }}>
-                        <span className={"bo-badge "+(s.status==="pending"?"bo-badge-amber":s.status==="approved"?"bo-badge-green":"bo-badge-red")}>{s.status}</span>
+                        {s.type !== "requisition" && <span className={"bo-badge "+(s.status==="pending"?"bo-badge-amber":s.status==="approved"?"bo-badge-green":"bo-badge-red")}>{s.status}</span>}
                         {isOrphanApproved(s) && (
                           dismissedOrphanIds.has(s.id)
                             ? <span className="bo-badge" style={{ background:"var(--surface)", color:"var(--ink5)" }} title="Flagged as approved-but-not-applied; acknowledged.">✓ Ack'd</span>
