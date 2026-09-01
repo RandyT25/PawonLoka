@@ -19,21 +19,51 @@ export default function InvRebuildPreview() {
 
   async function preview() {
     setLoading(true); setMessage(''); setRows([]); setApplied(false); setPinStep(false)
-    const [{ data: sessions }, { data: ingredients }, { data: movements }] = await Promise.all([
-      supabase.from('stock_opname').select('*').gte('date', '2026-08-01').order('date').limit(1),
+    
+    // Fetch sessions and ingredients
+    const [{ data: sessions }, { data: ingredients }] = await Promise.all([
+      supabase.from('stock_opname').select('*').eq('date', '2026-08-01'),
       supabase.from('ingredients').select('id,name,unit,stock'),
-      supabase.from('stock_movements').select('ingredient_id,qty,date').gte('date', '2026-08-01'),
     ])
-    const baseline = sessions?.[0]
-    if (!baseline) {
-      setMessage('No stock opname on or after 1 Aug was found. No rebuild can be proposed.')
+    
+    // Paginate stock movements to bypass 1000 row limit
+    let movements = []
+    let hasMore = true
+    let page = 0
+    const pageSize = 1000
+    while (hasMore) {
+      const { data } = await supabase.from('stock_movements')
+        .select('ingredient_id,qty,date')
+        .gte('date', '2026-08-01')
+        .range(page * pageSize, (page + 1) * pageSize - 1)
+      if (data && data.length > 0) {
+        movements = movements.concat(data)
+        page++
+        hasMore = data.length === pageSize
+      } else {
+        hasMore = false
+      }
+    }
+    if (!sessions || sessions.length === 0) {
+      setMessage('No stock opname on 1 Aug was found. No rebuild can be proposed.')
       setLoading(false); return
     }
-    const base = Object.fromEntries((baseline.items || []).map(i => [i.ingredient_id, Number(i.actual_qty || 0)]))
+
+    // Merge items from all 4 opname sessions into one unified baseline
+    const base = {}
+    sessions.forEach(session => {
+      ;(session.items || []).forEach(i => {
+        base[i.ingredient_id] = Number(i.actual_qty || 0)
+      })
+    })
+
+    const baselineDate = '2026-08-01'
+
     const moved = {}
-    ;(movements || []).filter(m => m.date > baseline.date).forEach(m => {
+    ;(movements || []).filter(m => m.date > baselineDate).forEach(m => {
       moved[m.ingredient_id] = (moved[m.ingredient_id] || 0) + Number(m.qty || 0)
     })
+    
     const computed = (ingredients || []).map(i => {
       const opening    = base[i.id]
       const calculated = opening == null ? null : opening + (moved[i.id] || 0)
@@ -41,7 +71,7 @@ export default function InvRebuildPreview() {
     }).filter(r => r.delta !== 0 || r.opening == null)
 
     setRows(computed)
-    setMessage(`Preview uses ${baseline.id} (${baseline.date}). ${computed.length} ingredient(s) differ from current stock.`)
+    setMessage(`Preview uses ${sessions.length} opname session(s) from ${baselineDate}. ${computed.length} ingredient(s) differ from current stock.`)
     setLoading(false)
   }
 
