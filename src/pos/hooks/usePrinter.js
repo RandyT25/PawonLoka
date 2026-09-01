@@ -42,11 +42,17 @@ function buildReceiptPayload(order, opts = {}, paperSize = "80mm") {
     itemDiscLabel: i.itemDiscLabel || null,
   }));
 
-  const subtotal = items.reduce((s, i) => s + i.price * i.qty - i.itemDisc, 0);
-  const taxAmt   = tax?.enabled     ? Math.round(subtotal * (tax.rate / 100))     : 0;
+  // Prefer the order's own persisted subtotal/tax — recomputing tax from the raw
+  // (pre-discount) subtotal here used to print a different tax figure than what was
+  // actually charged and saved, even though the total line below already trusted
+  // order.total — so the printed lines didn't add up to the printed total. Recomputing
+  // is only a fallback for a pre-payment bill preview, where the order isn't saved yet.
+  const rawSubtotal = items.reduce((s, i) => s + i.price * i.qty - i.itemDisc, 0);
+  const subtotal = order.subtotal ?? rawSubtotal;
+  const taxAmt   = order.tax ?? (tax?.enabled ? Math.round(subtotal * (tax.rate / 100)) : 0);
   const svcAmt   = service?.enabled ? Math.round(subtotal * (service.rate / 100)) : 0;
   const discount = Math.round(order.discount || 0);
-  const total    = subtotal + taxAmt + svcAmt - discount;
+  const total    = order.total ?? (subtotal + taxAmt + svcAmt - discount);
   const change   = Math.round(order.change || 0);
 
   const now = order.created_at ? new Date(order.created_at) : new Date();
@@ -60,7 +66,7 @@ function buildReceiptPayload(order, opts = {}, paperSize = "80mm") {
     tax:      taxAmt,
     service:  svcAmt,
     discount,
-    total:    order.total || total,
+    total,
     change,
     payments: (order.payments || []).map(p => ({ method: p.method || "", amount: Math.round(p.amount || 0) })),
     outlet:   outlet || {},

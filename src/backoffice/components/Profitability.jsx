@@ -255,18 +255,22 @@ export default function Profitability() {
           <table style={{ width:"100%", borderCollapse:"collapse", minWidth:1000 }}>
             <thead>
               <tr style={{ background:"#F8FAFC" }}>
-                {["#","Menu","Cat","HPP/COGS","Harga Sekarang","COGS %","Profit","Harga Baru","COGS % Baru","Δ COGS","Profit Baru","Rec. Price @ "+target+"%","Status"].map(h => (
+                {["#","Menu","Cat","HPP/COGS","Harga Sekarang","COGS %","Profit","Margin %","Harga Baru","COGS % Baru","Δ COGS","Profit Baru","Rec. Price @ "+target+"%","Status"].map(h => (
                   <th key={h} style={{ padding:"10px 12px", textAlign:"left", fontSize:10, fontWeight:700, color:"var(--ink4)", borderBottom:"1px solid #E8ECF0", whiteSpace:"nowrap" }}>{h}</th>
                 ))}
               </tr>
             </thead>
             <tbody>
-              {filtered.length === 0 && <tr><td colSpan={13} style={{ textAlign:"center", padding:32, color:"var(--ink5)" }}>No products found</td></tr>}
+              {filtered.length === 0 && <tr><td colSpan={14} style={{ textAlign:"center", padding:32, color:"var(--ink5)" }}>No products found</td></tr>}
               {filtered.map((p, idx) => {
                 const cpp      = p.cogs || 0
                 const price    = p.price || 0
                 const cogsP    = price > 0 ? (cpp / price * 100) : 0
                 const profit   = price - cpp
+                // Same (revenue-cost)/revenue definition Accounting.jsx uses for its P&L margin —
+                // shown here so a per-menu-item number can actually be cross-checked against it,
+                // instead of only ever showing COGS% (its inverse) with no % margin field at all.
+                const marginP  = price > 0 ? (profit / price * 100) : 0
                 const newPrice = parseFloat(editPrices[p.sku]) || price
                 const newCogsP = newPrice > 0 ? (cpp / newPrice * 100) : 0
                 const delta    = newCogsP - cogsP
@@ -305,6 +309,9 @@ export default function Profitability() {
                       ) : <span style={{ color:"var(--ink5)", fontSize:12 }}>—</span>}
                     </td>
                     <td style={{ padding:"8px 12px", fontSize:12, fontWeight:600, color: profit > 0 ? "var(--green)" : "var(--red)" }}>{fmt(profit)}</td>
+                    <td style={{ padding:"8px 12px", fontSize:12, fontWeight:700, color: marginP >= 0 ? "var(--green)" : "var(--red)" }}>
+                      {cpp > 0 ? fmtP(marginP) : <span style={{ color:"var(--ink5)" }}>—</span>}
+                    </td>
                     <td style={{ padding:"8px 12px" }}>
                       <input type="number" value={editPrices[p.sku]||""} onChange={e=>setEditPrices(prev=>({...prev,[p.sku]:e.target.value}))}
                         placeholder={price.toLocaleString("id-ID")} className="bo-input" style={{ width:90, fontSize:12, padding:"4px 8px", borderColor: hasChange ? "var(--brand)" : undefined }} />

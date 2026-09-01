@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import { PAY_METHODS, fmt } from '../../shared/constants'
+import { computeOrderTotals } from '../../shared/orderPricing'
 
 import { useWhatsApp } from '../hooks/useWhatsApp'
 
@@ -58,14 +59,21 @@ export default function ChargeModal({ cart, totals, onConfirm, onClose, onSucces
   const [splitAmount, setSplitAmount] = useState('')
   const [splitChecked, setSplitChecked] = useState({})
 
-  const { subtotal, tax, total, fee } = totals
+  const { subtotal, fee } = totals
   const discAmt    = totals.discount ? Math.round(subtotal * totals.discount / 100) : 0
   const promoDisc  = appliedPromo ? appliedPromo.disc : 0
-  const grossTotal = (total || (subtotal + tax + (fee||0))) - discAmt - promoDisc
   const alreadyPaid = totals.splitPaid || 0
+  // Mirror computeOrderTotals() exactly — this is the same function POS.jsx uses to persist
+  // subtotal/tax/discount/total when the order is written. Computing tax/total any other way
+  // here (as this used to, taxing the pre-discount subtotal) let the checkout screen and the
+  // saved order disagree on the total for any order with both a discount and tax.
+  const preRedeem  = computeOrderTotals({ items: cart, discountPct: totals.discount || 0, promoDisc, taxRate })
+  const grossTotal = preRedeem.total + (fee||0)
   const actualTotal = grossTotal - alreadyPaid
   const maxPoints = customer ? Math.min(customer.points || 0, Math.floor(actualTotal / 100)) : 0
-  const finalTotal = actualTotal - (usePoints * 100)
+  const canonical  = computeOrderTotals({ items: cart, discountPct: totals.discount || 0, promoDisc, pointsValue: usePoints * 100, taxRate })
+  const tax = canonical.tax
+  const finalTotal = canonical.total + (fee||0) - alreadyPaid
   const isSplitAmount = activeSplit != null
   const splitFinal = activeSplit ? activeSplit.amount : finalTotal
   const multiTotal     = multiPay.reduce((s,p) => s+p.amount, 0)

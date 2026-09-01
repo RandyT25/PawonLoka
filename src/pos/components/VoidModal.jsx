@@ -4,6 +4,7 @@ import { fmt } from '../../shared/constants'
 import { qr } from '../../lib/quickRead'
 import { dbWrite } from '../../shared/dbWrite'
 import { offlineStore } from '../../lib/offlineStore'
+import { applyRecipeStockMovement } from '../../shared/stockMovements'
 
 export default function VoidModal({ onClose, managerPin = '9999' }) {
   const [step, setStep] = useState('search')
@@ -72,6 +73,14 @@ export default function VoidModal({ onClose, managerPin = '9999' }) {
     }, { id: selected.id })
 
     if (!saved) { submittingRef.current = false; setError('Gagal — cek koneksi dan coba lagi'); setLoading(false); return }
+
+    // Reverse the recipe deduction that happened at checkout — but only for a full void of an
+    // already-Paid order. An 'Open' order was never deducted (deductStock only fires at payment),
+    // and a partial refund doesn't tell us which physical items came back, so it's left alone
+    // rather than guessing — this used to be silently missing entirely, understating stock forever.
+    if (refundType === 'full' && selected.status === 'Paid' && Array.isArray(selected.items)) {
+      await applyRecipeStockMovement(selected.items, { sign: 1, type: 'Void', ref: selected.id })
+    }
 
     // Voiding/refunding a still-Open bill frees up its table — the floor plan's occupancy
     // cache needs invalidating or it'll keep showing the table as occupied by this order.

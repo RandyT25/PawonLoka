@@ -191,7 +191,11 @@ export default function Accounting() {
     const to = `${lastDay.getFullYear()}-${String(lastDay.getMonth()+1).padStart(2,"0")}-${String(lastDay.getDate()).padStart(2,"0")}`
 
     const [ordRes, expRes, poRes, staffRes, kbRes, obRes, ingRes, wasteRes, consumeRes, opnameRes, recipeRes, subRecipeIngRes] = await Promise.all([
-      supabase.from("orders").select("*").eq("status","Paid").gte("created_at",from+"T00:00:00+08:00").lte("created_at",to+"T23:59:59+08:00"),
+      // A partially-refunded order moves to status "Refunded", not "Paid" — its `total` is
+      // already net of the refund (VoidModal writes total: original - refundAmount), so
+      // excluding "Refunded" here didn't just miss the refund, it dropped the order's entire
+      // remaining (still-real) revenue from every report on this page.
+      supabase.from("orders").select("*").in("status",["Paid","Refunded"]).gte("created_at",from+"T00:00:00+08:00").lte("created_at",to+"T23:59:59+08:00"),
       supabase.from("expenses").select("*").gte("date",from).lte("date",to).order("date",{ascending:false}),
       supabase.from("purchase_orders").select("*").eq("status","Paid").gte("date",from).lte("date",to),
       supabase.from("staff").select("*"),
@@ -346,7 +350,9 @@ export default function Accounting() {
   const cashIn   = orders.filter(o=>o.payment==="Cash").reduce((a,o)=>a+(o.total||0),0)
   const qrisIn   = orders.filter(o=>o.payment!=="Cash").reduce((a,o)=>a+(o.total||0),0)
   const cashOut  = poTotal + salaryTotal + manualExpenses.filter(e=>e.payment_method==="Cash").reduce((a,e)=>a+(e.amount||0),0)
-  const netCash  = (openingBal.amount||0) + cashIn - cashOut
+  // Was missing qrisIn — a QRIS/transfer-heavy day showed a big negative "Saldo Akhir" here
+  // even though the KAS MASUK card right above it already displays cashIn+qrisIn as inflow.
+  const netCash  = (openingBal.amount||0) + cashIn + qrisIn - cashOut
 
   // A single "+ Pengeluaran" transaction can cover multiple accounts (e.g. one BKK paying
   // both Listrik and IPL) — expenses.cat only ever reflects the FIRST line's account, so
@@ -985,14 +991,18 @@ export default function Accounting() {
               { label:"Penjualan Cash",      masuk:fmt(cashIn),               keluar:null,          bold:false },
               { label:"Penjualan Non-Cash",  masuk:fmt(qrisIn),               keluar:null,          bold:false },
               { label:"Bahan Baku (PO)",     masuk:null,  keluar:fmt(bahanBakuPO),                  bold:false },
+              { label:"PO Non-Bahan Baku",   masuk:null,  keluar:fmt(nonFoodPOTotal),               bold:false },
               { label:"Gaji Karyawan",       masuk:null,  keluar:fmt(salaryTotal),                  bold:false },
               ...EXPENSE_CATEGORIES.filter(c=>!c.auto&&catTotal(c.id)>0).map(c=>({ label:c.icon+" "+c.label, masuk:null, keluar:fmt(catTotal(c.id)), bold:false })),
-              { label:"SALDO AKHIR",         masuk:fmt((openingBal.amount||0)+cashIn+qrisIn), keluar:fmt(cashOut), bold:true },
+              // Bold total row carries its own net value — the old `row.masuk||row.keluar` render
+              // always picked `masuk` (a non-empty string is always truthy), so `keluar`/cashOut
+              // was computed but never actually subtracted or shown here.
+              { label:"SALDO AKHIR",         net:fmt(netCash),                                      bold:true },
             ].map((row,i)=>(
               <div key={i} style={{ display:"flex",justifyContent:"space-between",alignItems:"center",padding:"10px 0",borderBottom:"1px solid var(--surface2)",fontWeight:row.bold?800:400 }}>
                 <span style={{ fontSize:13,flex:1 }}>{row.label}</span>
-                <span style={{ fontSize:13,minWidth:100,textAlign:"right",color:row.masuk&&!row.bold?"#00875A":row.keluar&&!row.bold?"#DE350B":row.bold?"var(--ink)":"#6B778C" }}>
-                  {row.masuk||row.keluar||"—"}
+                <span style={{ fontSize:13,minWidth:100,textAlign:"right",color:row.net?(netCash>=0?"#00875A":"#DE350B"):row.masuk&&!row.bold?"#00875A":row.keluar&&!row.bold?"#DE350B":"#6B778C" }}>
+                  {row.net||row.masuk||row.keluar||"—"}
                 </span>
               </div>
             ))}

@@ -8,17 +8,7 @@ import { offlineStore, offlineFullSync } from '../lib/offlineStore'
 import { qr } from '../lib/quickRead'
 import { dbWrite } from '../shared/dbWrite'
 import { computeOrderTotals } from '../shared/orderPricing'
-
-// Convert a qty expressed in `unit` into the ingredient's own base/stock unit
-function toBaseUnit(ing, qty, unit) {
-  if (unit === ing.unit) return qty
-  const conv = (ing.conversions||[]).find(c => c.unit === unit)
-  if (conv && parseFloat(conv.qty) > 0) return qty * parseFloat(conv.qty)
-  const fallbacks = { kg:1000, L:1000, Galon:19000 }
-  if (ing.unit==='gr' && fallbacks[unit]) return qty * fallbacks[unit]
-  if (ing.unit==='ml' && fallbacks[unit]) return qty * fallbacks[unit]
-  return qty
-}
+import { applyRecipeStockMovement } from '../shared/stockMovements'
 import PinLogin from './components/PinLogin'
 import MenuGrid from './components/MenuGrid'
 import Cart from './components/Cart'
@@ -336,77 +326,8 @@ export default function POS() {
   }
 
   async function deductStock(items) {
-    try {
-      const skus = [...new Set(items.map(i => i.sku).filter(Boolean))]
-      if (!skus.length) return
-      // Frozen Food items (packaged retail items like "Ayam Taliwang Frozen") have their recipe
-      // ingredients deducted at packing time instead (Staff Portal → Production Batch) — deducting
-      // again here on sale would double-count. Reuses the same 'products' offline cache offlineFullSync
-      // already populates, so this stays free/instant on the common (cache-hit) path.
-      const allProds = await qr(supabase.from('products').select('sku,cat'), { cache:'products', ms:5000 })
-      const frozenSkus = new Set((allProds||[]).filter(p => p.cat === 'Frozen Food').map(p => p.sku))
-      const deductibleSkus = skus.filter(s => !frozenSkus.has(s))
-      if (!deductibleSkus.length) return
-      // Batch fetch all recipes for all SKUs in one query
-      const allRecipes = await qr(supabase.from('recipes')
-        .select('product_id, ingredient_id, qty, unit')
-        .in('product_id', deductibleSkus), { ms:5000 })
-      if (!allRecipes?.length) return
-      // Fetch ingredient records (incl. conversions) up front so recipe-line units can be converted to each ingredient's base unit
-      const ingIds = [...new Set(allRecipes.map(r => r.ingredient_id))]
-      const ings = await qr(supabase.from('ingredients').select('id, stock, name, unit, conversions').in('id', ingIds), { ms:5000 })
-      const ingMap = {}
-      for (const ing of ings || []) ingMap[ing.id] = ing
-      // Accumulate total deductions per ingredient, converted to each ingredient's base unit
-      const deductions = {}
-      for (const item of items) {
-        const rows = allRecipes.filter(r => r.product_id === item.sku)
-        for (const ri of rows) {
-          const ing = ingMap[ri.ingredient_id]
-          if (!ing) continue
-          const qtyBase = toBaseUnit(ing, ri.qty || 0, ri.unit) * (item.qty || 1)
-          if (qtyBase) deductions[ri.ingredient_id] = (deductions[ri.ingredient_id] || 0) + qtyBase
-        }
-      }
-      if (!Object.keys(deductions).length) return
-      // Ingredient stock updates and the stock_movements log are independent of
-      // each other (movements are built from `deductions`/`ingMap`, not from the
-      // update results) — run both in parallel instead of one after the other.
-      const movDate = new Date().toISOString().slice(0, 10)
-      const movTime = new Date().toLocaleTimeString('id-ID', { hour:'2-digit', minute:'2-digit' })
-      const ts = Date.now()
-      const movements = Object.keys(deductions).map((id, idx) => {
-        const ing = ingMap[id]
-        return {
-          id: `MOV-${ts}-${idx}`,
-          type: 'Sale',
-          ingredient_id: id,
-          ingredient_name: ing?.name,
-          qty: -Math.abs(deductions[id] || 0),
-          unit: ing?.unit,
-          ref: items[0]?.orderId || `ORD-${ts}`,
-          note: 'Auto dari penjualan',
-          date: movDate,
-          time: movTime,
-        }
-      })
-      await Promise.all([
-        Promise.all(Object.keys(deductions).map(id => {
-          const ing = ingMap[id]
-          if (!ing) return null
-          return supabase.from('ingredients').update({
-            stock: Math.max(0, (ing.stock || 0) - deductions[id])
-          }).eq('id', id)
-        })),
-        // Supabase's query builder is thenable (works with await/Promise.all) but is not a
-        // real Promise, so it has no .catch() method — calling one directly threw a
-        // synchronous TypeError that silently killed this insert on every single sale
-        // (caught by the try/catch below, so payment always succeeded regardless — this is
-        // why zero "Sale" stock_movements were ever recorded despite deduction working).
-        // Promise.resolve() wraps it in a real Promise so .catch() is safe to chain.
-        Promise.resolve(supabase.from('stock_movements').insert(movements)).catch(() => {}),
-      ])
-    } catch(e) { console.error('Stock deduction error:', e) }
+    if (!items?.length) return
+    await applyRecipeStockMovement(items, { sign: -1, type: 'Sale', ref: items[0]?.orderId })
   }
 
   async function loadData() {
