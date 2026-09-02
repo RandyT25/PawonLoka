@@ -44,8 +44,8 @@ const OTHER_STARTUP_ITEMS = [
   { name: "Take Away Box / Cup / Plastic", qty: 1, amount: 500000, cat: "Packaging" },
   { name: "Bengkel Motor Operasional", qty: 1, amount: 1100000, cat: "Transport" },
   { name: "MCB 1A Listrik", qty: 1, amount: 85000, cat: "Utilities" },
-  { name: "Rental Bulan Juli (Utang Roman)", qty: 1, amount: 4500000, cat: "Sewa Tempat" },
-  { name: "Rental Bulan Agustus + 15 hari September (Utang Roman)", qty: 1, amount: 4500000, cat: "Sewa Tempat" },
+  { name: "Rental Bulan Juli (Dibayar Claudy)", qty: 1, amount: 4500000, cat: "Sewa Tempat" },
+  { name: "Rental Bulan Agustus + 15 hari September (Dibayar Claudy)", qty: 1, amount: 4500000, cat: "Sewa Tempat" },
   { name: "Rental Bulan September (15 hari)", qty: 15, amount: 2250000, cat: "Sewa Tempat" },
   { name: "Rental Bulan Oktober", qty: 1, amount: 4500000, cat: "Sewa Tempat" },
   { name: "APAR 1kg", qty: 1, amount: 400000, cat: "Safety" },
@@ -446,42 +446,6 @@ export default function UtangPiutang() {
                 >
                   💰 Catat Bagi Hasil / Pengembalian Modal
                 </button>
-              </div>
-            </div>
-
-            {/* Roman */}
-            <div className="bo-card" style={{ padding: "18px 20px" }}>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 10 }}>
-                <div>
-                  <div style={{ fontSize: 16, fontWeight: 900, color: "var(--ink1)" }}>Roman (Sewa Tempat)</div>
-                  <div style={{ fontSize: 12, color: "var(--ink4)" }}>Utang Sewa Bulan Juli & Agust/Sep</div>
-                </div>
-                <span className="bo-badge bo-badge-red">Utang Sewa</span>
-              </div>
-              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, marginBottom: 4 }}>
-                <span style={{ color: "var(--ink4)" }}>Total Utang Sewa:</span>
-                <span style={{ fontWeight: 800 }}>Rp 9.000.000</span>
-              </div>
-              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, marginBottom: 4 }}>
-                <span style={{ color: "var(--ink4)" }}>Sudah Dicicil / Dibayar:</span>
-                <span style={{ fontWeight: 800, color: "#00875A" }}>{fmt(utangRecords.find(r=>r.id==="DEBT-ROMAN-RENT")?.data?.paid_amount || 0)}</span>
-              </div>
-              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 14, fontWeight: 900, borderTop: "1px solid var(--surface3)", paddingTop: 8, marginTop: 8 }}>
-                <span>Sisa Utang Belum Lunas:</span>
-                <span style={{ color: "#DE350B" }}>{fmt(utangRecords.find(r=>r.id==="DEBT-ROMAN-RENT")?.data?.remaining_amount || 9000000)}</span>
-              </div>
-              <div style={{ marginTop: 12 }}>
-                <button
-                  onClick={() => {
-                    const rec = utangRecords.find(r => r.id === "DEBT-ROMAN-RENT")
-                    if (rec) { setSelectedRecord(rec); setShowPayModal(true) }
-                  }}
-                  className="bo-btn bo-btn-sm"
-                  style={{ width: "100%", background: "#DE350B", color: "#fff", fontWeight: 700 }}
-                >
-                  💰 Catat Cicilan / Pelunasan Sewa
-                </button>
-              </div>
             </div>
           </div>
         </div>
