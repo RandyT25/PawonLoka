@@ -45,6 +45,7 @@ const Schedule        = lazy(() => import("./components/Schedule"))
 const Attendance      = lazy(() => import("./components/Attendance"))
 const DepartmentsPage = lazy(() => import("./components/Departments"))
 const Accounting      = lazy(() => import("./components/Accounting"))
+const UtangPiutang    = lazy(() => import("./components/UtangPiutang"))
 const Rekonsiliasi    = lazy(() => import("./components/Rekonsiliasi"))
 const Assets          = lazy(() => import("./components/Assets"))
 const Orders          = lazy(() => import("./components/Orders"))
@@ -168,6 +169,7 @@ const NAV = [
   { id:"reports",           label:"Reports & Export" },
   { group:"Finance" },
   { id:"accounting" },
+  { id:"utang-piutang",     label:"Utang & Piutang" },
   { id:"rekonsiliasi" },
   { id:"assets" },
   { group:"Menu" },
@@ -227,6 +229,7 @@ const NAV_LABELS = {
   "menu-performance": "Menu Performance", "sales-report": "Sales Report",
   "product-report": "Product Report", "top-slow": "Top & Slow Moving",
   reports: "Reports & Export", accounting: "Accounting",
+  "utang-piutang": "Utang & Piutang",
   rekonsiliasi: "Rekonsiliasi", assets: "Assets", products: "Products",
   categories: "Categories", modifiers: "Modifiers",
   "units-of-measure": "Units of Measure",
@@ -263,9 +266,10 @@ const SCREENS = {
   "product-report":   ProductReport,
   "top-slow":         TopSlowReport,
   reports:            Reports,
-  accounting:        Accounting,
-  rekonsiliasi:      Rekonsiliasi,
-  assets:            Assets,
+  accounting:         Accounting,
+  "utang-piutang":    UtangPiutang,
+  rekonsiliasi:       Rekonsiliasi,
+  assets:             Assets,
   products:          Products,
   categories:        Categories,
   modifiers:         Modifiers,
