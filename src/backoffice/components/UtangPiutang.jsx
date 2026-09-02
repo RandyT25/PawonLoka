@@ -179,7 +179,7 @@ const EQUIPMENT_ITEMS = [
 ]
 
 export default function UtangPiutang() {
-  const [activeTab, setActiveTab] = useState("overview") // overview | assets_capex | debts | modal | receivables | history
+  const [activeTab, setActiveTab] = useState("overview") // overview | talangan | assets_capex | modal | debts | receivables | history
   const [records, setRecords] = useState([])
   const [assets, setAssets] = useState([])
   const [loading, setLoading] = useState(true)
@@ -190,7 +190,7 @@ export default function UtangPiutang() {
 
   // Modals
   const [showAddModal, setShowAddModal] = useState(false)
-  const [addType, setAddType] = useState("utang") // utang | piutang | modal
+  const [addType, setAddType] = useState("utang") // utang | piutang | modal | talangan_owner
   const [addForm, setAddForm] = useState({
     party_name: "",
     category: "Utang Usaha",
@@ -244,8 +244,18 @@ export default function UtangPiutang() {
 
   // Debts and Capital calculations
   const modalRecords = useMemo(() => records.filter(r => r.data?.type === "modal"), [records])
+  const talanganRecords = useMemo(() => records.filter(r => r.data?.type === "talangan_owner"), [records])
   const utangRecords = useMemo(() => records.filter(r => r.data?.type === "utang"), [records])
   const piutangRecords = useMemo(() => records.filter(r => r.data?.type === "piutang"), [records])
+
+  const totalTalanganOriginal = useMemo(() => talanganRecords.reduce((sum, r) => sum + (r.data?.original_amount || 0), 0), [talanganRecords])
+  const totalTalanganPaid = useMemo(() => talanganRecords.reduce((sum, r) => sum + (r.data?.paid_amount || 0), 0), [talanganRecords])
+  const totalTalanganRemaining = useMemo(() => talanganRecords.reduce((sum, r) => sum + (r.data?.remaining_amount !== undefined ? r.data.remaining_amount : r.data?.original_amount || 0), 0), [talanganRecords])
+
+  const claudyEquity = modalRecords.find(r => r.id === "CAPITAL-CLAUDY")?.data?.original_amount || 77289028
+  const claudyEquityPaid = modalRecords.find(r => r.id === "CAPITAL-CLAUDY")?.data?.paid_amount || 0
+  const claudyTotalMoneyIn = claudyEquity + totalTalanganOriginal
+  const claudyTotalMoneyRemaining = (claudyEquity - claudyEquityPaid) + totalTalanganRemaining
 
   const totalUtangRemaining = useMemo(() => utangRecords.reduce((sum, r) => sum + (r.data?.remaining_amount || 0), 0), [utangRecords])
   const totalPiutangRemaining = useMemo(() => piutangRecords.reduce((sum, r) => sum + (r.data?.remaining_amount || 0), 0), [piutangRecords])
@@ -297,7 +307,8 @@ export default function UtangPiutang() {
     setSaving(true)
     try {
       const amount = parseFloat(String(addForm.original_amount).replace(/[^\d]/g, "")) || 0
-      const newId = (addType === "modal" ? "CAPITAL-" : addType === "utang" ? "DEBT-" : "PIUTANG-") + Date.now()
+      const prefix = addType === "modal" ? "CAPITAL-" : addType === "talangan_owner" ? "TALANGAN-" : addType === "utang" ? "DEBT-" : "PIUTANG-"
+      const newId = prefix + Date.now()
 
       const payload = {
         id: newId,
@@ -414,20 +425,27 @@ export default function UtangPiutang() {
         <div>
           <div style={{ fontSize: 20, fontWeight: 900, color: "var(--ink1)" }}>💳 Utang, Piutang & Modal Awal</div>
           <div style={{ fontSize: 13, color: "var(--ink4)" }}>
-            Buku besar modal awal pendirian resto, rincian belanja startup (renovasi, equipment & operasional), serta pencatatan utang & piutang.
+            Buku besar modal awal pendirian resto, dana talangan operasional Claudy (Owner's Loan), rincian belanja startup & piutang.
           </div>
         </div>
 
         <div style={{ display: "flex", gap: 8 }}>
           <button
-            onClick={() => { setAddType("utang"); setShowAddModal(true) }}
+            onClick={() => { setAddType("talangan_owner"); setAddForm({ party_name: "Claudy", category: "Talangan Gaji Karyawan", original_amount: "", start_date: new Date().toISOString().slice(0, 10), notes: "" }); setShowAddModal(true) }}
+            className="bo-btn bo-btn-sm"
+            style={{ background: "#7C3AED", color: "#fff", fontWeight: 700 }}
+          >
+            + Catat Talangan Claudy
+          </button>
+          <button
+            onClick={() => { setAddType("utang"); setAddForm({ party_name: "", category: "Utang Usaha", original_amount: "", start_date: new Date().toISOString().slice(0, 10), notes: "" }); setShowAddModal(true) }}
             className="bo-btn bo-btn-sm"
             style={{ background: "#DE350B", color: "#fff", fontWeight: 700 }}
           >
             + Catat Utang Baru
           </button>
           <button
-            onClick={() => { setAddType("piutang"); setShowAddModal(true) }}
+            onClick={() => { setAddType("piutang"); setAddForm({ party_name: "", category: "Piutang Katering", original_amount: "", start_date: new Date().toISOString().slice(0, 10), notes: "" }); setShowAddModal(true) }}
             className="bo-btn bo-btn-sm"
             style={{ background: "#00875A", color: "#fff", fontWeight: 700 }}
           >
@@ -440,9 +458,10 @@ export default function UtangPiutang() {
       <div style={{ display: "flex", gap: 6, marginBottom: 18, borderBottom: "1px solid var(--surface3)", paddingBottom: 8, overflowX: "auto" }}>
         {[
           ["overview", "📊 Ringkasan & Ekuitas"],
+          ["talangan", "👑 Dana Talangan Claudy (" + talanganRecords.length + ")"],
           ["assets_capex", "🏢 Rincian Belanja Startup (Rp 90,2jt)"],
-          ["modal", "👑 Modal Pemilik & Mitra (" + modalRecords.length + ")"],
-          ["debts", "💸 Utang Usaha (" + utangRecords.length + ")"],
+          ["modal", "👥 Modal Saham Pemilik & Mitra"],
+          ["debts", "💸 Utang Usaha Luar (" + utangRecords.length + ")"],
           ["receivables", "📥 Piutang Usaha (" + piutangRecords.length + ")"],
           ["history", "📜 Histori Cicilan (" + paymentLogs.length + ")"]
         ].map(([key, label]) => (
@@ -463,72 +482,89 @@ export default function UtangPiutang() {
           {/* KPI Summary Cards */}
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 12, marginBottom: 20 }}>
             <div className="bo-card" style={{ padding: "16px 20px", borderLeft: "4px solid #6366F1" }}>
-              <div style={{ fontSize: 11, fontWeight: 700, color: "#6366F1", textTransform: "uppercase" }}>Total Modal Awal (Equity)</div>
+              <div style={{ fontSize: 11, fontWeight: 700, color: "#6366F1", textTransform: "uppercase" }}>1. Modal Awal Pendirian (Equity)</div>
               <div style={{ fontSize: 24, fontWeight: 900, color: "var(--ink1)", marginTop: 4 }}>{fmt(grandTotalStartup)}</div>
               <div style={{ fontSize: 11, color: "var(--ink4)", marginTop: 4 }}>Claudy (85,6%) + Mila (14,4%)</div>
             </div>
 
-            <div className="bo-card" style={{ padding: "16px 20px", borderLeft: "4px solid #00B8D9" }}>
-              <div style={{ fontSize: 11, fontWeight: 700, color: "#00B8D9", textTransform: "uppercase" }}>Realisasi Belanja Startup</div>
-              <div style={{ fontSize: 24, fontWeight: 900, color: "#00875A", marginTop: 4 }}>{fmt(grandTotalStartup)}</div>
-              <div style={{ fontSize: 11, color: "var(--ink4)", marginTop: 4 }}>100% dialokasikan ke Renovasi & Aset</div>
+            <div className="bo-card" style={{ padding: "16px 20px", borderLeft: "4px solid #7C3AED" }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: "#7C3AED", textTransform: "uppercase" }}>2. Dana Talangan Claudy (Owner's Loan)</div>
+              <div style={{ fontSize: 24, fontWeight: 900, color: "#7C3AED", marginTop: 4 }}>{fmt(totalTalanganRemaining)}</div>
+              <div style={{ fontSize: 11, color: "var(--ink4)", marginTop: 4 }}>8 bulan talangan gaji & defisit operasional</div>
             </div>
 
-            <div className="bo-card" style={{ padding: "16px 20px", borderLeft: "4px solid #DE350B" }}>
-              <div style={{ fontSize: 11, fontWeight: 700, color: "#DE350B", textTransform: "uppercase" }}>Utang Usaha Belum Lunas</div>
-              <div style={{ fontSize: 24, fontWeight: 900, color: totalUtangRemaining > 0 ? "#DE350B" : "var(--ink4)", marginTop: 4 }}>{fmt(totalUtangRemaining)}</div>
-              <div style={{ fontSize: 11, color: "var(--ink4)", marginTop: 4 }}>{utangRecords.length} catatan utang aktif</div>
+            <div className="bo-card" style={{ padding: "16px 20px", borderLeft: "4px solid #00B8D9" }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: "#00B8D9", textTransform: "uppercase" }}>Total Dana Masuk dari Claudy</div>
+              <div style={{ fontSize: 24, fontWeight: 900, color: "var(--ink1)", marginTop: 4 }}>{fmt(claudyTotalMoneyIn)}</div>
+              <div style={{ fontSize: 11, color: "var(--ink4)", marginTop: 4 }}>Modal (Rp 77,2jt) + Talangan (Rp 84,0jt)</div>
             </div>
 
             <div className="bo-card" style={{ padding: "16px 20px", borderLeft: "4px solid #00875A" }}>
-              <div style={{ fontSize: 11, fontWeight: 700, color: "#00875A", textTransform: "uppercase" }}>Piutang Usaha</div>
+              <div style={{ fontSize: 11, fontWeight: 700, color: "#00875A", textTransform: "uppercase" }}>Piutang Usaha (Receivables)</div>
               <div style={{ fontSize: 24, fontWeight: 900, color: "#00875A", marginTop: 4 }}>{fmt(totalPiutangRemaining)}</div>
               <div style={{ fontSize: 11, color: "var(--ink4)", marginTop: 4 }}>Tagihan katering / kasbon tertunda</div>
             </div>
           </div>
 
-          {/* Equity Breakdown */}
+          {/* Equity & Talangan Breakdown */}
           <div style={{ fontSize: 15, fontWeight: 800, color: "var(--ink1)", marginBottom: 12 }}>
-            👥 Pembagian Modal Disetor Pemilik & Mitra
+            👥 Ringkasan Dana Pemilik & Mitra
           </div>
 
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))", gap: 14, marginBottom: 20 }}>
-            {/* Claudy */}
-            <div className="bo-card" style={{ padding: "18px 20px" }}>
+            {/* Claudy Card */}
+            <div className="bo-card" style={{ padding: "18px 20px", border: "1.5px solid #E0E7FF" }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 10 }}>
                 <div>
                   <div style={{ fontSize: 16, fontWeight: 900, color: "var(--ink1)" }}>Claudy (Pemilik Utama)</div>
-                  <div style={{ fontSize: 12, color: "var(--ink4)" }}>Modal Pendirian Resto · Porsi Kepemilikan: <b>85,60%</b></div>
+                  <div style={{ fontSize: 12, color: "var(--ink4)" }}>Modal Saham (85,6%) + Dana Talangan Operasional</div>
                 </div>
-                <span className="bo-badge bo-badge-blue">Owner Equity</span>
+                <span className="bo-badge bo-badge-blue">Owner & Founder</span>
               </div>
+              
               <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, marginBottom: 4 }}>
-                <span style={{ color: "var(--ink4)" }}>Modal Awal Disetor:</span>
+                <span style={{ color: "var(--ink4)" }}>1. Modal Disetor Awal (Saham):</span>
                 <span style={{ fontWeight: 800 }}>Rp 77.289.028</span>
               </div>
               <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, marginBottom: 4 }}>
-                <span style={{ color: "var(--ink4)" }}>Sudah Kembali (Prive):</span>
-                <span style={{ fontWeight: 800, color: "#00875A" }}>{fmt(modalRecords.find(r=>r.id==="CAPITAL-CLAUDY")?.data?.paid_amount || 0)}</span>
+                <span style={{ color: "var(--ink4)" }}>2. Dana Talangan Gaji & Defisit:</span>
+                <span style={{ fontWeight: 800, color: "#7C3AED" }}>{fmt(totalTalanganOriginal)}</span>
               </div>
-              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 14, fontWeight: 900, borderTop: "1px solid var(--surface3)", paddingTop: 8, marginTop: 8 }}>
-                <span>Sisa Modal Belum Kembali:</span>
-                <span style={{ color: "#6366F1" }}>{fmt(modalRecords.find(r=>r.id==="CAPITAL-CLAUDY")?.data?.remaining_amount || 77289028)}</span>
+              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, marginBottom: 4, borderTop: "1px dashed var(--surface3)", paddingTop: 6 }}>
+                <span style={{ fontWeight: 700, color: "var(--ink1)" }}>Total Dana Claudy Masuk ke Resto:</span>
+                <span style={{ fontWeight: 900, color: "var(--ink1)" }}>{fmt(claudyTotalMoneyIn)}</span>
               </div>
-              <div style={{ marginTop: 12 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, marginBottom: 4 }}>
+                <span style={{ color: "var(--ink4)" }}>Sudah Diganti Resto:</span>
+                <span style={{ fontWeight: 800, color: "#00875A" }}>{fmt(claudyEquityPaid + totalTalanganPaid)}</span>
+              </div>
+              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 14, fontWeight: 900, borderTop: "1.5px solid var(--surface3)", paddingTop: 8, marginTop: 8 }}>
+                <span>Sisa Total Dana Belum Kembali:</span>
+                <span style={{ color: "#4F46E5" }}>{fmt(claudyTotalMoneyRemaining)}</span>
+              </div>
+
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginTop: 14 }}>
+                <button
+                  onClick={() => setActiveTab("talangan")}
+                  className="bo-btn bo-btn-sm"
+                  style={{ background: "#7C3AED", color: "#fff", fontWeight: 700 }}
+                >
+                  Lihat 8 Talangan →
+                </button>
                 <button
                   onClick={() => {
                     const rec = modalRecords.find(r => r.id === "CAPITAL-CLAUDY")
                     if (rec) { setSelectedRecord(rec); setShowPayModal(true) }
                   }}
-                  className="bo-btn bo-btn-sm"
-                  style={{ width: "100%", background: "#6366F1", color: "#fff", fontWeight: 700 }}
+                  className="bo-btn bo-btn-sm bo-btn-ghost"
+                  style={{ fontWeight: 700 }}
                 >
-                  💰 Catat Pengembalian Modal / Prive
+                  Catat Prive Saham
                 </button>
               </div>
             </div>
 
-            {/* Mila */}
+            {/* Mila Card */}
             <div className="bo-card" style={{ padding: "18px 20px" }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 10 }}>
                 <div>
@@ -549,7 +585,7 @@ export default function UtangPiutang() {
                 <span>Sisa Modal Belum Kembali:</span>
                 <span style={{ color: "#00875A" }}>{fmt(modalRecords.find(r=>r.id==="CAPITAL-MILA")?.data?.remaining_amount || 13000000)}</span>
               </div>
-              <div style={{ marginTop: 12 }}>
+              <div style={{ marginTop: 14 }}>
                 <button
                   onClick={() => {
                     const rec = modalRecords.find(r => r.id === "CAPITAL-MILA")
@@ -567,27 +603,137 @@ export default function UtangPiutang() {
           {/* LEGEND / PANDUAN PENJELASAN */}
           <div className="bo-card" style={{ background: "#F8FAFC", border: "1px solid #E2E8F0", padding: "16px 20px" }}>
             <div style={{ fontSize: 14, fontWeight: 800, color: "#0F172A", marginBottom: 8, display: "flex", alignItems: "center", gap: 6 }}>
-              💡 <span>Panduan & Penjelasan Buku Modal:</span>
+              💡 <span>Panduan & Penjelasan Buku Modal vs Dana Talangan:</span>
             </div>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: 12, fontSize: 12.5, color: "#334155", lineHeight: 1.5 }}>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: 14, fontSize: 12.5, color: "#334155", lineHeight: 1.5 }}>
               <div>
                 <b>1. Modal Awal Disetor (Equity):</b>
-                <div>Uang tunai pribadi yang Claudy & Mila keluarkan saat merintis PawonLoka (Total Rp 90.289.028). Uang ini <b>sudah 100% dibelanjakan</b> untuk pembangunan resto, peralatan & sewa tempat.</div>
+                <div>Uang pribadi yang Claudy & Mila keluarkan saat merintis PawonLoka (Total Rp 90.289.028). Uang ini <b>sudah 100% dibelanjakan</b> untuk pembangunan resto, peralatan & sewa tempat, dan menentukan porsi kepemilikan saham (85,6% : 14,4%).</div>
               </div>
               <div>
-                <b>2. Kenapa Nominal Ini Tetap Tercatat?:</b>
-                <div>Ini adalah bukti pembukuan sah rasio kepemilikan bisnis (Claudy 85,6% : Mila 14,4%) dan pelacak ROI *(Return on Investment)* agar tidak terjadi selisih paham di kemudian hari.</div>
+                <b>2. Dana Talangan Claudy (Owner's Loan - Rp 84.091.326):</b>
+                <div>Uang pribadi tambahan yang Claudy suntikkan ke kas resto di luar investasi awal untuk menambal defisit operasional & pembayaran gaji staf (Nov 2026 s/d Juli 2027). <b>Ini adalah utang resto kepada Claudy yang menjadi prioritas utama untuk diganti saat resto menghasilkan profit.</b></div>
               </div>
               <div>
-                <b>3. Fungsi Tombol "Catat Pengembalian Modal / Prive":</b>
-                <div>Hanya digunakan jika di masa depan resto membagikan laba bersih *(dividen/prive)* kembali ke kantong pribadi Claudy atau Mila, sehingga terlacak kapan modal awal tersebut lunas kembali.</div>
+                <b>3. Prioritas Pengembalian Kas Resto:</b>
+                <div>Saat resto membukukan keuntungan bersih, kas resto terlebih dahulu digunakan untuk melunasi <b>Dana Talangan Rp 84.091.326</b> kepada Claudy sebelum membagikan laba/dividen saham kepada para pemilik.</div>
               </div>
             </div>
           </div>
         </div>
       )}
 
-      {/* TAB 2: ALOKASI MODAL & RINCIAN BELANJA STARTUP */}
+      {/* TAB 2: DANA TALANGAN CLAUDY */}
+      {activeTab === "talangan" && (
+        <div>
+          {/* KPI Cards */}
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: 12, marginBottom: 18 }}>
+            <div className="bo-card" style={{ padding: "16px 20px", borderLeft: "4px solid #7C3AED" }}>
+              <div style={{ fontSize: 11, fontWeight: 800, color: "#7C3AED", textTransform: "uppercase" }}>Total Dana Talangan (Owner's Loan)</div>
+              <div style={{ fontSize: 24, fontWeight: 900, color: "var(--ink1)", marginTop: 4 }}>{fmt(totalTalanganOriginal)}</div>
+              <div style={{ fontSize: 11.5, color: "var(--ink4)", marginTop: 4 }}>Total 8 transaksi suntikan dana pribadi</div>
+            </div>
+
+            <div className="bo-card" style={{ padding: "16px 20px", borderLeft: "4px solid #00875A" }}>
+              <div style={{ fontSize: 11, fontWeight: 800, color: "#00875A", textTransform: "uppercase" }}>Sudah Diganti oleh Resto</div>
+              <div style={{ fontSize: 24, fontWeight: 900, color: "#00875A", marginTop: 4 }}>{fmt(totalTalanganPaid)}</div>
+              <div style={{ fontSize: 11.5, color: "var(--ink4)", marginTop: 4 }}>Pelunasan dari laba operasional resto</div>
+            </div>
+
+            <div className="bo-card" style={{ padding: "16px 20px", borderLeft: "4px solid #DE350B" }}>
+              <div style={{ fontSize: 11, fontWeight: 800, color: "#DE350B", textTransform: "uppercase" }}>Sisa Belum Diganti (Kewajiban Resto)</div>
+              <div style={{ fontSize: 24, fontWeight: 900, color: totalTalanganRemaining > 0 ? "#DE350B" : "#00875A", marginTop: 4 }}>{fmt(totalTalanganRemaining)}</div>
+              <div style={{ fontSize: 11.5, color: "var(--ink4)", marginTop: 4 }}>Prioritas pelunasan utama ke Claudy</div>
+            </div>
+          </div>
+
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12, flexWrap: "wrap", gap: 8 }}>
+            <div style={{ fontSize: 15, fontWeight: 800, color: "var(--ink1)" }}>
+              📋 Rincian 8 Dana Talangan Pribadi Claudy
+            </div>
+            <button
+              onClick={() => { setAddType("talangan_owner"); setAddForm({ party_name: "Claudy", category: "Talangan Gaji Karyawan", original_amount: "", start_date: new Date().toISOString().slice(0, 10), notes: "" }); setShowAddModal(true) }}
+              className="bo-btn bo-btn-sm"
+              style={{ background: "#7C3AED", color: "#fff", fontWeight: 700 }}
+            >
+              + Tambah Talangan Baru
+            </button>
+          </div>
+
+          <div className="bo-card" style={{ padding: 0, overflowX: "auto" }}>
+            <table className="bo-table">
+              <thead>
+                <tr>
+                  <th>Periode / Bulan</th>
+                  <th>Kategori Peruntukan</th>
+                  <th>Keterangan & Rincian Pembukuan</th>
+                  <th style={{ textAlign: "right" }}>Nominal Awal</th>
+                  <th style={{ textAlign: "right" }}>Sudah Diganti</th>
+                  <th style={{ textAlign: "right" }}>Sisa Belum Diganti</th>
+                  <th style={{ textAlign: "center" }}>Status</th>
+                  <th>Aksi</th>
+                </tr>
+              </thead>
+              <tbody>
+                {talanganRecords.map(r => {
+                  const d = r.data || {}
+                  const isPaid = (d.remaining_amount !== undefined ? d.remaining_amount : d.original_amount) === 0
+                  return (
+                    <tr key={r.id}>
+                      <td style={{ fontWeight: 800, color: "var(--ink1)" }}>
+                        {d.period || d.start_date}
+                      </td>
+                      <td>
+                        <span className="bo-badge bo-badge-blue">{d.category}</span>
+                      </td>
+                      <td style={{ fontSize: 12, color: "var(--ink3)", maxWidth: 320 }}>
+                        {d.notes || "—"}
+                      </td>
+                      <td style={{ textAlign: "right", fontWeight: 800 }}>{fmt(d.original_amount)}</td>
+                      <td style={{ textAlign: "right", color: "#00875A", fontWeight: 700 }}>{fmt(d.paid_amount || 0)}</td>
+                      <td style={{ textAlign: "right", fontWeight: 900, color: isPaid ? "var(--ink4)" : "#DE350B" }}>
+                        {fmt(d.remaining_amount !== undefined ? d.remaining_amount : d.original_amount)}
+                      </td>
+                      <td style={{ textAlign: "center" }}>
+                        <span className={"bo-badge " + (isPaid ? "bo-badge-green" : "bo-badge-red")}>
+                          {isPaid ? "Lunas" : "Belum Diganti"}
+                        </span>
+                      </td>
+                      <td>
+                        <div style={{ display: "flex", gap: 6 }}>
+                          {!isPaid && (
+                            <button
+                              onClick={() => { setSelectedRecord(r); setShowPayModal(true) }}
+                              className="bo-btn bo-btn-sm"
+                              style={{ background: "#7C3AED", color: "#fff", fontWeight: 700 }}
+                            >
+                              Ganti Talangan
+                            </button>
+                          )}
+                          <button onClick={() => handleDeleteRecord(r.id)} className="bo-btn bo-btn-ghost bo-btn-sm" style={{ color: "var(--red)" }}>
+                            Hapus
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+              <tfoot>
+                <tr style={{ background: "var(--surface2)", fontWeight: 900 }}>
+                  <td colSpan={3} style={{ textAlign: "right", paddingRight: 16 }}>TOTAL DANA TALANGAN:</td>
+                  <td style={{ textAlign: "right", color: "var(--brand)" }}>{fmt(totalTalanganOriginal)}</td>
+                  <td style={{ textAlign: "right", color: "#00875A" }}>{fmt(totalTalanganPaid)}</td>
+                  <td style={{ textAlign: "right", color: "#DE350B" }}>{fmt(totalTalanganRemaining)}</td>
+                  <td colSpan={2}></td>
+                </tr>
+              </tfoot>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* TAB 3: ALOKASI MODAL & RINCIAN BELANJA STARTUP */}
       {activeTab === "assets_capex" && (
         <div>
           {/* 3 Main Pillar Cards */}
@@ -730,7 +876,7 @@ export default function UtangPiutang() {
         </div>
       )}
 
-      {/* TAB 3: MODAL PEMILIK & MITRA */}
+      {/* TAB 4: MODAL SAHAM PEMILIK & MITRA */}
       {activeTab === "modal" && (
         <div className="bo-card" style={{ padding: 0, overflowX: "auto" }}>
           <table className="bo-table">
@@ -774,7 +920,7 @@ export default function UtangPiutang() {
         </div>
       )}
 
-      {/* TAB 4: UTANG USAHA */}
+      {/* TAB 5: UTANG USAHA LUAR */}
       {activeTab === "debts" && (
         <div className="bo-card" style={{ padding: 0, overflowX: "auto" }}>
           <table className="bo-table">
@@ -792,7 +938,7 @@ export default function UtangPiutang() {
             </thead>
             <tbody>
               {utangRecords.length === 0 ? (
-                <tr><td colSpan={8} style={{ textAlign: "center", padding: 30, color: "var(--ink4)" }}>Belum ada catatan utang</td></tr>
+                <tr><td colSpan={8} style={{ textAlign: "center", padding: 30, color: "var(--ink4)" }}>Belum ada catatan utang pihak ketiga</td></tr>
               ) : (
                 utangRecords.map(r => {
                   const d = r.data || {}
@@ -838,7 +984,7 @@ export default function UtangPiutang() {
         </div>
       )}
 
-      {/* TAB 5: PIUTANG USAHA */}
+      {/* TAB 6: PIUTANG USAHA */}
       {activeTab === "receivables" && (
         <div className="bo-card" style={{ padding: 0, overflowX: "auto" }}>
           <table className="bo-table">
@@ -902,7 +1048,7 @@ export default function UtangPiutang() {
         </div>
       )}
 
-      {/* TAB 6: HISTORI PEMBAYARAN */}
+      {/* TAB 7: HISTORI PEMBAYARAN */}
       {activeTab === "history" && (
         <div className="bo-card" style={{ padding: 0, overflowX: "auto" }}>
           <table className="bo-table">
@@ -926,7 +1072,7 @@ export default function UtangPiutang() {
                     <td style={{ fontWeight: 700 }}>{fmtDate(p.date)}</td>
                     <td style={{ fontWeight: 800, color: "var(--ink1)" }}>{p.party_name}</td>
                     <td>
-                      <span className={"bo-badge " + (p.recordType === "utang" ? "bo-badge-red" : p.recordType === "piutang" ? "bo-badge-green" : "bo-badge-blue")}>
+                      <span className={"bo-badge " + (p.recordType === "utang" || p.recordType === "talangan_owner" ? "bo-badge-red" : p.recordType === "piutang" ? "bo-badge-green" : "bo-badge-blue")}>
                         {p.category}
                       </span>
                     </td>
@@ -944,37 +1090,37 @@ export default function UtangPiutang() {
         </div>
       )}
 
-      {/* MODAL: TAMBAH UTANG / PIUTANG / MODAL */}
+      {/* MODAL: TAMBAH UTANG / TALANGAN / PIUTANG / MODAL */}
       {showAddModal && (
         <div className="bo-modal-overlay" onClick={() => setShowAddModal(false)}>
           <div className="bo-modal" style={{ maxWidth: 520 }} onClick={e => e.stopPropagation()}>
             <div className="bo-modal-header">
               <div className="bo-modal-title">
-                {addType === "utang" ? "💸 Catat Utang Baru" : addType === "piutang" ? "📥 Catat Piutang Baru" : "👑 Catat Modal / Investasi"}
+                {addType === "talangan_owner" ? "👑 Catat Dana Talangan Claudy" : addType === "utang" ? "💸 Catat Utang Baru" : addType === "piutang" ? "📥 Catat Piutang Baru" : "👥 Catat Modal / Investasi"}
               </div>
               <button className="bo-modal-close" onClick={() => setShowAddModal(false)}>✕</button>
             </div>
 
             <div className="bo-modal-body">
               <div style={{ marginBottom: 12 }}>
-                <label className="bo-label">Nama Pihak / Peminjam / Investor *</label>
+                <label className="bo-label">Nama Pihak / Peminjam *</label>
                 <input
                   type="text"
                   value={addForm.party_name}
                   onChange={e => setAddForm({ ...addForm, party_name: e.target.value })}
-                  placeholder="Contoh: Supplier Daging, Pelanggan Katering..."
+                  placeholder="Contoh: Claudy, Supplier Daging, Pelanggan Katering..."
                   className="bo-input"
                   style={{ width: "100%" }}
                 />
               </div>
 
               <div style={{ marginBottom: 12 }}>
-                <label className="bo-label">Kategori *</label>
+                <label className="bo-label">Kategori / Peruntukan *</label>
                 <input
                   type="text"
                   value={addForm.category}
                   onChange={e => setAddForm({ ...addForm, category: e.target.value })}
-                  placeholder="Contoh: Utang Bahan Baku, Piutang Katering, Kasbon..."
+                  placeholder="Contoh: Talangan Gaji Karyawan, Talangan Defisit Operasional..."
                   className="bo-input"
                   style={{ width: "100%" }}
                 />
@@ -994,7 +1140,7 @@ export default function UtangPiutang() {
 
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 12 }}>
                 <div>
-                  <label className="bo-label">Tanggal Mulai</label>
+                  <label className="bo-label">Tanggal Mulai / Periode</label>
                   <input
                     type="date"
                     value={addForm.start_date}
@@ -1016,11 +1162,11 @@ export default function UtangPiutang() {
               </div>
 
               <div style={{ marginBottom: 12 }}>
-                <label className="bo-label">Catatan</label>
+                <label className="bo-label">Catatan / Rincian Pembukuan</label>
                 <textarea
                   value={addForm.notes}
                   onChange={e => setAddForm({ ...addForm, notes: e.target.value })}
-                  placeholder="Keterangan transaksi, perjanjian cicilan..."
+                  placeholder="Keterangan transaksi, rincian pengeluaran vs penjualan..."
                   className="bo-input"
                   style={{ width: "100%", height: 70 }}
                 />
@@ -1043,7 +1189,7 @@ export default function UtangPiutang() {
           <div className="bo-modal" style={{ maxWidth: 480 }} onClick={e => e.stopPropagation()}>
             <div className="bo-modal-header">
               <div className="bo-modal-title">
-                💰 Catat Pembayaran / Cicilan ({selectedRecord.data?.party_name})
+                💰 Catat Pengembalian / Cicilan ({selectedRecord.data?.party_name} - {selectedRecord.data?.category})
               </div>
               <button className="bo-modal-close" onClick={() => setShowPayModal(false)}>✕</button>
             </div>
@@ -1051,24 +1197,24 @@ export default function UtangPiutang() {
             <div className="bo-modal-body">
               <div style={{ background: "var(--surface2)", padding: "12px 14px", borderRadius: 8, marginBottom: 14, fontSize: 13 }}>
                 <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
-                  <span style={{ color: "var(--ink4)" }}>Kategori:</span>
+                  <span style={{ color: "var(--ink4)" }}>Peruntukan:</span>
                   <b>{selectedRecord.data?.category}</b>
                 </div>
                 <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
-                  <span style={{ color: "var(--ink4)" }}>Sisa Saldo:</span>
-                  <b style={{ color: selectedRecord.data?.type === "utang" ? "#DE350B" : "var(--brand)" }}>
-                    {fmt(selectedRecord.data?.remaining_amount)}
+                  <span style={{ color: "var(--ink4)" }}>Sisa Saldo Belum Diganti:</span>
+                  <b style={{ color: "#DE350B" }}>
+                    {fmt(selectedRecord.data?.remaining_amount !== undefined ? selectedRecord.data?.remaining_amount : selectedRecord.data?.original_amount)}
                   </b>
                 </div>
               </div>
 
               <div style={{ marginBottom: 12 }}>
-                <label className="bo-label">Nominal Pembayaran (Rp) *</label>
+                <label className="bo-label">Nominal Pengembalian (Rp) *</label>
                 <input
                   type="number"
                   value={payForm.amount}
                   onChange={e => setPayForm({ ...payForm, amount: e.target.value })}
-                  placeholder={String(selectedRecord.data?.remaining_amount || 0)}
+                  placeholder={String(selectedRecord.data?.remaining_amount || selectedRecord.data?.original_amount || 0)}
                   className="bo-input"
                   style={{ width: "100%", fontSize: 18, fontWeight: 900, color: "var(--brand)" }}
                 />
@@ -1107,7 +1253,7 @@ export default function UtangPiutang() {
                   type="text"
                   value={payForm.notes}
                   onChange={e => setPayForm({ ...payForm, notes: e.target.value })}
-                  placeholder="Contoh: Pembagian dividen bulan September, pelunasan sisa..."
+                  placeholder="Contoh: Pengembalian talangan bulan Nov dari profit kas..."
                   className="bo-input"
                   style={{ width: "100%" }}
                 />
@@ -1117,7 +1263,7 @@ export default function UtangPiutang() {
             <div className="bo-modal-footer">
               <button onClick={() => setShowPayModal(false)} className="bo-btn bo-btn-ghost">Batal</button>
               <button onClick={handleSavePayment} disabled={saving} className="bo-btn bo-btn-primary">
-                {saving ? "Menyimpan..." : "Simpan Pembayaran"}
+                {saving ? "Menyimpan..." : "Simpan Pengembalian"}
               </button>
             </div>
           </div>
