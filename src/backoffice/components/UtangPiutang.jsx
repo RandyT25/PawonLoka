@@ -446,6 +446,7 @@ export default function UtangPiutang() {
                 >
                   💰 Catat Bagi Hasil / Pengembalian Modal
                 </button>
+              </div>
             </div>
           </div>
         </div>
