@@ -4,7 +4,7 @@ import DateRangePicker, { buildDateRange } from "../DateRangePicker"
 import { exportExcel, exportPDF, formatPeriodLabel, filenameSlug, fmtIDR } from "../exportUtils"
 import { toBaseUnit as toBase } from "../../../shared/unitConversion"
 
-const fmt    = n => "Rp " + Number(n||0).toLocaleString("id-ID")
+const fmt    = n => "Rp " + Math.round(Number(n||0)).toLocaleString("id-ID")
 const fmtQty = (n, unit) => Number(n||0).toLocaleString("id-ID", { maximumFractionDigits:2 }) + (unit ? " " + unit : "")
 
 const STATUS_CFG = {
