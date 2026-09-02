@@ -885,6 +885,581 @@ function ScreenProducts({ topItems, topDrinkItems }) {
   )
 }
 
+/* ─── Debt, Equity & Dana Talangan Screen ─── */
+function ScreenDebtEquity() {
+  const [tab, setTab] = useState("talangan") // talangan | equity | debts | receivables
+  const [records, setRecords] = useState([])
+  const [loading, setLoading] = useState(true)
+  
+  // Pay Modal
+  const [showPayModal, setShowPayModal] = useState(false)
+  const [selectedRecord, setSelectedRecord] = useState(null)
+  const [payAmount, setPayAmount] = useState("")
+  const [payMethod, setPayMethod] = useState("Transfer")
+  const [payNotes, setPayNotes] = useState("")
+  const [saving, setSaving] = useState(false)
+
+  // Add Record Modal
+  const [showAddModal, setShowAddModal] = useState(false)
+  const [addForm, setAddForm] = useState({
+    party_name: "Claudy",
+    type: "talangan_owner",
+    category: "Talangan Gaji Karyawan",
+    amount: "",
+    period: "",
+    notes: ""
+  })
+
+  const loadDebts = async () => {
+    try {
+      const { data } = await supabase
+        .from("staff_submissions")
+        .select("*")
+        .eq("type", "debt_loan")
+        .order("submitted_at", { ascending: true })
+      setRecords(data || [])
+    } catch (e) {
+      console.error("Error loading debt records:", e)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    loadDebts()
+    const ch = supabase.channel("owner_debts_rt")
+      .on("postgres_changes", { event: "*", schema: "public", table: "staff_submissions" }, loadDebts)
+      .subscribe()
+    return () => supabase.removeChannel(ch)
+  }, [])
+
+  const talanganList = records.filter(r => r.data?.type === "talangan_owner")
+  const modalList = records.filter(r => r.data?.type === "modal")
+  const debtsList = records.filter(r => r.data?.type === "utang")
+  const receivablesList = records.filter(r => r.data?.type === "piutang")
+
+  const totalTalangan = talanganList.reduce((s, r) => s + (r.data?.original_amount || 0), 0)
+  const totalTalanganPaid = talanganList.reduce((s, r) => s + (r.data?.paid_amount || 0), 0)
+  const totalTalanganRemaining = talanganList.reduce((s, r) => s + (r.data?.remaining_amount !== undefined ? r.data.remaining_amount : r.data?.original_amount || 0), 0)
+
+  const claudyEquity = modalList.find(r => r.id === "CAPITAL-CLAUDY")?.data?.original_amount || 77289028
+  const claudyEquityPaid = modalList.find(r => r.id === "CAPITAL-CLAUDY")?.data?.paid_amount || 0
+  const claudyTotalMoney = claudyEquity + totalTalangan
+  const claudyRemaining = (claudyEquity - claudyEquityPaid) + totalTalanganRemaining
+
+  const milaEquity = modalList.find(r => r.id === "CAPITAL-MILA")?.data?.original_amount || 13000000
+  const milaPaid = modalList.find(r => r.id === "CAPITAL-MILA")?.data?.paid_amount || 0
+  const milaRemaining = modalList.find(r => r.id === "CAPITAL-MILA")?.data?.remaining_amount !== undefined ? modalList.find(r => r.id === "CAPITAL-MILA")?.data?.remaining_amount : 13000000
+
+  const totalDebtsRemaining = debtsList.reduce((s, r) => s + (r.data?.remaining_amount || 0), 0)
+  const totalReceivablesRemaining = receivablesList.reduce((s, r) => s + (r.data?.remaining_amount || 0), 0)
+
+  async function handlePayback() {
+    if (!selectedRecord || !payAmount) return
+    setSaving(true)
+    try {
+      const amt = parseFloat(String(payAmount).replace(/[^\d]/g, "")) || 0
+      const curData = selectedRecord.data || {}
+      const curPaid = curData.paid_amount || 0
+      const newPaid = curPaid + amt
+      const newRemaining = Math.max(0, (curData.original_amount || 0) - newPaid)
+
+      const newPayment = {
+        id: "PAY-" + Date.now(),
+        date: new Date().toISOString().slice(0, 10),
+        amount: amt,
+        payment_method: payMethod,
+        notes: payNotes,
+        recorded_by: "Owner App (Mobile)",
+        created_at: new Date().toISOString()
+      }
+
+      const updatedPayments = [...(curData.payments || []), newPayment]
+      const updatedStatus = newRemaining === 0 ? "paid" : "active"
+
+      const updatedData = {
+        ...curData,
+        paid_amount: newPaid,
+        remaining_amount: newRemaining,
+        payments: updatedPayments
+      }
+
+      const { error } = await supabase.from("staff_submissions").update({
+        data: updatedData,
+        status: updatedStatus
+      }).eq("id", selectedRecord.id)
+
+      if (error) throw error
+
+      setShowPayModal(false)
+      setSelectedRecord(null)
+      setPayAmount("")
+      setPayNotes("")
+      await loadDebts()
+    } catch (err) {
+      alert("Gagal: " + err.message)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  async function handleAddRecord() {
+    if (!addForm.party_name || !addForm.amount) return
+    setSaving(true)
+    try {
+      const amt = parseFloat(String(addForm.amount).replace(/[^\d]/g, "")) || 0
+      const prefix = addForm.type === "talangan_owner" ? "TALANGAN-" : addForm.type === "utang" ? "DEBT-" : "PIUTANG-"
+      const payload = {
+        id: prefix + Date.now(),
+        type: "debt_loan",
+        status: "active",
+        submitted_by: "Claudy",
+        submitted_at: new Date().toISOString(),
+        data: {
+          type: addForm.type,
+          party_name: addForm.party_name,
+          category: addForm.category,
+          period: addForm.period,
+          original_amount: amt,
+          paid_amount: 0,
+          remaining_amount: amt,
+          start_date: new Date().toISOString().slice(0, 10),
+          notes: addForm.notes || "",
+          payments: []
+        }
+      }
+      const { error } = await supabase.from("staff_submissions").insert(payload)
+      if (error) throw error
+
+      setShowAddModal(false)
+      setAddForm({ party_name: "Claudy", type: "talangan_owner", category: "Talangan Gaji Karyawan", amount: "", period: "", notes: "" })
+      await loadDebts()
+    } catch (err) {
+      alert("Gagal menambahkan: " + err.message)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div style={{ maxWidth: 900 }}>
+      {/* Top 3 KPI Executive Cards */}
+      <div className="ow-grid-3">
+        <div className="ow-stat">
+          <div className="ow-stat-accent" style={{ background: "#7C3AED" }} />
+          <div className="ow-stat-label">Total Dana Claudy</div>
+          <div className="ow-stat-val" style={{ color: "#7C3AED", fontSize: 19 }}>{fmtK(claudyTotalMoney)}</div>
+          <div className="ow-stat-sub">Modal Rp 77,2jt + Talangan Rp 84,0jt</div>
+        </div>
+
+        <div className="ow-stat">
+          <div className="ow-stat-accent" style={{ background: totalTalanganRemaining > 0 ? "#EF4444" : "#10B981" }} />
+          <div className="ow-stat-label">Sisa Talangan Claudy</div>
+          <div className="ow-stat-val" style={{ color: totalTalanganRemaining > 0 ? "#EF4444" : "#10B981", fontSize: 19 }}>{fmtK(totalTalanganRemaining)}</div>
+          <div className="ow-stat-sub" style={{ color: totalTalanganRemaining > 0 ? "#EF4444" : "#10B981" }}>
+            {totalTalanganRemaining > 0 ? "Prioritas pelunasan resto" : "Lunas 100%"}
+          </div>
+        </div>
+
+        <div className="ow-stat">
+          <div className="ow-stat-accent" style={{ background: "#10B981" }} />
+          <div className="ow-stat-label">Modal Mitra Mila (14,4%)</div>
+          <div className="ow-stat-val" style={{ color: "#10B981", fontSize: 19 }}>{fmtK(milaEquity)}</div>
+          <div className="ow-stat-sub">Sisa modal: {fmtK(milaRemaining)}</div>
+        </div>
+      </div>
+
+      {/* Quick Action Button & Navigation Pills */}
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14, flexWrap: "wrap", gap: 8 }}>
+        <div style={{ display: "flex", gap: 6, overflowX: "auto", paddingBottom: 4 }}>
+          {[
+            ["talangan", `👑 Talangan Claudy (${talanganList.length})`],
+            ["equity", "👥 Modal Saham"],
+            ["debts", `💸 Utang Luar (${debtsList.length})`],
+            ["receivables", `📥 Piutang (${receivablesList.length})`]
+          ].map(([k, lbl]) => (
+            <button
+              key={k}
+              onClick={() => setTab(k)}
+              className={"ow-range-btn" + (tab === k ? " active" : "")}
+              style={{ whiteSpace: "nowrap", fontSize: 12 }}
+            >
+              {lbl}
+            </button>
+          ))}
+        </div>
+
+        <button
+          onClick={() => setShowAddModal(true)}
+          style={{ padding: "6px 14px", borderRadius: 8, background: "#7C3AED", color: "#fff", border: "none", fontWeight: 700, fontSize: 12, cursor: "pointer", display: "flex", alignItems: "center", gap: 5 }}
+        >
+          <span>+</span> Catat Baru
+        </button>
+      </div>
+
+      {/* TAB 1: DANA TALANGAN CLAUDY */}
+      {tab === "talangan" && (
+        <div>
+          <div style={{ background: "#F5F3FF", border: "1px solid #DDD6FE", borderRadius: 12, padding: "12px 16px", marginBottom: 14, fontSize: 12, color: "#5B21B6", lineHeight: 1.5 }}>
+            💡 <b>Dana Talangan Pemilik (Owner's Loan):</b> Uang pribadi tambahan yang Claudy keluarkan untuk menambal defisit gaji & operasional bulanan resto. Ini adalah utang resto kepada Claudy yang harus diganti saat kas resto untung.
+          </div>
+
+          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+            {talanganList.map(r => {
+              const d = r.data || {}
+              const remaining = d.remaining_amount !== undefined ? d.remaining_amount : d.original_amount
+              const isPaid = remaining === 0
+              return (
+                <div key={r.id} className="ow-card" style={{ padding: "14px 16px", marginBottom: 0, borderLeft: `4px solid ${isPaid ? "#10B981" : "#7C3AED"}` }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 6 }}>
+                    <div>
+                      <div style={{ fontWeight: 800, fontSize: 14, color: "#1E293B" }}>
+                        {d.period ? `Bulan ${d.period}` : d.category}
+                      </div>
+                      <span className="ow-badge ow-badge-purple" style={{ marginTop: 3 }}>{d.category}</span>
+                    </div>
+                    <span className={"ow-badge " + (isPaid ? "ow-badge-green" : "ow-badge-red")}>
+                      {isPaid ? "Lunas" : "Belum Diganti"}
+                    </span>
+                  </div>
+
+                  {d.notes && (
+                    <div style={{ fontSize: 11.5, color: "#64748B", marginBottom: 10, lineHeight: 1.4, background: "#F8FAFC", padding: "6px 10px", borderRadius: 6 }}>
+                      {d.notes}
+                    </div>
+                  )}
+
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, borderTop: "1px solid #F1F5F9", paddingTop: 8, fontSize: 11 }}>
+                    <div>
+                      <div style={{ color: "#94A3B8" }}>Nominal Awal</div>
+                      <div style={{ fontWeight: 700, color: "#1E293B", marginTop: 2 }}>{fmt(d.original_amount)}</div>
+                    </div>
+                    <div>
+                      <div style={{ color: "#94A3B8" }}>Sudah Diganti</div>
+                      <div style={{ fontWeight: 700, color: "#10B981", marginTop: 2 }}>{fmt(d.paid_amount || 0)}</div>
+                    </div>
+                    <div>
+                      <div style={{ color: "#94A3B8" }}>Sisa Belum Diganti</div>
+                      <div style={{ fontWeight: 800, color: isPaid ? "#94A3B8" : "#EF4444", marginTop: 2 }}>{fmt(remaining)}</div>
+                    </div>
+                  </div>
+
+                  {!isPaid && (
+                    <div style={{ marginTop: 10, paddingTop: 8, borderTop: "1px dashed #E2E8F0", display: "flex", justifyContent: "flex-end" }}>
+                      <button
+                        onClick={() => {
+                          setSelectedRecord(r)
+                          setPayAmount(String(remaining))
+                          setShowPayModal(true)
+                        }}
+                        style={{ padding: "6px 14px", borderRadius: 6, background: "#7C3AED", color: "#fff", border: "none", fontWeight: 700, fontSize: 11.5, cursor: "pointer" }}
+                      >
+                        💰 Ganti / Cicil Talangan
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* TAB 2: MODAL SAHAM */}
+      {tab === "equity" && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+          {/* Claudy Equity Card */}
+          <div className="ow-card" style={{ padding: "16px", border: "1.5px solid #E0E7FF", marginBottom: 0 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 8 }}>
+              <div>
+                <div style={{ fontWeight: 800, fontSize: 15, color: "#1E293B" }}>Claudy (Pemilik Utama)</div>
+                <div style={{ fontSize: 11, color: "#64748B" }}>Porsi Kepemilikan: <b>85,60%</b></div>
+              </div>
+              <span className="ow-badge ow-badge-blue">Owner & Founder</span>
+            </div>
+            <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, padding: "4px 0" }}>
+              <span style={{ color: "#64748B" }}>1. Modal Disetor Awal (Saham):</span>
+              <span style={{ fontWeight: 700 }}>Rp 77.289.028</span>
+            </div>
+            <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, padding: "4px 0" }}>
+              <span style={{ color: "#64748B" }}>2. Dana Talangan Operasional:</span>
+              <span style={{ fontWeight: 700, color: "#7C3AED" }}>{fmt(totalTalangan)}</span>
+            </div>
+            <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, fontWeight: 800, borderTop: "1px solid #E2E8F0", paddingTop: 8, marginTop: 4 }}>
+              <span>Total Uang Masuk dari Claudy:</span>
+              <span style={{ color: "#4F46E5" }}>{fmt(claudyTotalMoney)}</span>
+            </div>
+            <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, padding: "4px 0" }}>
+              <span style={{ color: "#64748B" }}>Sudah Kembali:</span>
+              <span style={{ fontWeight: 700, color: "#10B981" }}>{fmt(claudyEquityPaid + totalTalanganPaid)}</span>
+            </div>
+            <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, fontWeight: 800, borderTop: "1.5px solid #E2E8F0", paddingTop: 8, marginTop: 6, color: "#1E293B" }}>
+              <span>Sisa Total Belum Kembali:</span>
+              <span style={{ color: "#EF4444" }}>{fmt(claudyRemaining)}</span>
+            </div>
+          </div>
+
+          {/* Mila Equity Card */}
+          <div className="ow-card" style={{ padding: "16px", marginBottom: 0 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 8 }}>
+              <div>
+                <div style={{ fontWeight: 800, fontSize: 15, color: "#1E293B" }}>Mila (Mitra / Investor)</div>
+                <div style={{ fontSize: 11, color: "#64748B" }}>Porsi Kepemilikan: <b>14,40%</b></div>
+              </div>
+              <span className="ow-badge ow-badge-green">Partner Equity</span>
+            </div>
+            <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, padding: "4px 0" }}>
+              <span style={{ color: "#64748B" }}>Modal Awal Disetor:</span>
+              <span style={{ fontWeight: 700 }}>Rp 13.000.000</span>
+            </div>
+            <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, padding: "4px 0" }}>
+              <span style={{ color: "#64748B" }}>Sudah Dikembalikan:</span>
+              <span style={{ fontWeight: 700, color: "#10B981" }}>{fmt(milaPaid)}</span>
+            </div>
+            <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, fontWeight: 800, borderTop: "1px solid #E2E8F0", paddingTop: 8, marginTop: 6 }}>
+              <span>Sisa Modal Belum Kembali:</span>
+              <span style={{ color: "#10B981" }}>{fmt(milaRemaining)}</span>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* TAB 3: UTANG LUAR */}
+      {tab === "debts" && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+          {debtsList.length === 0 ? (
+            <div className="ow-card" style={{ textAlign: "center", padding: 30, color: "#94A3B8", fontSize: 13 }}>
+              Tidak ada utang pihak ketiga / supplier saat ini
+            </div>
+          ) : (
+            debtsList.map(r => {
+              const d = r.data || {}
+              const remaining = d.remaining_amount || 0
+              const isPaid = remaining === 0
+              return (
+                <div key={r.id} className="ow-card" style={{ padding: "14px 16px", marginBottom: 0 }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 6 }}>
+                    <div>
+                      <div style={{ fontWeight: 800, fontSize: 14, color: "#1E293B" }}>{d.party_name}</div>
+                      <span className="ow-badge ow-badge-amber" style={{ marginTop: 3 }}>{d.category}</span>
+                    </div>
+                    <span className={"ow-badge " + (isPaid ? "ow-badge-green" : "ow-badge-red")}>
+                      {isPaid ? "Lunas" : "Belum Lunas"}
+                    </span>
+                  </div>
+                  <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, marginTop: 8 }}>
+                    <span style={{ color: "#64748B" }}>Sisa Utang:</span>
+                    <span style={{ fontWeight: 800, color: isPaid ? "#94A3B8" : "#EF4444" }}>{fmt(remaining)}</span>
+                  </div>
+                </div>
+              )
+            })
+          )}
+        </div>
+      )}
+
+      {/* TAB 4: PIUTANG */}
+      {tab === "receivables" && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+          {receivablesList.length === 0 ? (
+            <div className="ow-card" style={{ textAlign: "center", padding: 30, color: "#94A3B8", fontSize: 13 }}>
+              Tidak ada piutang tertunda saat ini
+            </div>
+          ) : (
+            receivablesList.map(r => {
+              const d = r.data || {}
+              const remaining = d.remaining_amount || 0
+              const isPaid = remaining === 0
+              return (
+                <div key={r.id} className="ow-card" style={{ padding: "14px 16px", marginBottom: 0 }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 6 }}>
+                    <div>
+                      <div style={{ fontWeight: 800, fontSize: 14, color: "#1E293B" }}>{d.party_name}</div>
+                      <span className="ow-badge ow-badge-blue" style={{ marginTop: 3 }}>{d.category}</span>
+                    </div>
+                    <span className={"ow-badge " + (isPaid ? "ow-badge-green" : "ow-badge-amber")}>
+                      {isPaid ? "Lunas" : "Belum Lunas"}
+                    </span>
+                  </div>
+                  <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, marginTop: 8 }}>
+                    <span style={{ color: "#64748B" }}>Sisa Piutang:</span>
+                    <span style={{ fontWeight: 800, color: isPaid ? "#94A3B8" : "#10B981" }}>{fmt(remaining)}</span>
+                  </div>
+                </div>
+              )
+            })
+          )}
+        </div>
+      )}
+
+      {/* MODAL: MOBILE PAYBACK */}
+      {showPayModal && selectedRecord && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.55)", zIndex: 9999, display: "flex", alignItems: "flex-end", justifyContent: "center" }} onClick={() => setShowPayModal(false)}>
+          <div style={{ background: "#fff", width: "100%", maxWidth: 440, borderRadius: "20px 20px 0 0", padding: 20, maxHeight: "90vh", overflowY: "auto" }} onClick={e => e.stopPropagation()}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
+              <div style={{ fontWeight: 800, fontSize: 16, color: "#1E293B" }}>
+                💰 Catat Pengembalian / Cicilan
+              </div>
+              <button onClick={() => setShowPayModal(false)} style={{ background: "none", border: "none", fontSize: 20, cursor: "pointer", color: "#94A3B8" }}>✕</button>
+            </div>
+
+            <div style={{ background: "#F8FAFC", padding: "10px 14px", borderRadius: 8, marginBottom: 14, fontSize: 12.5 }}>
+              <div style={{ color: "#64748B" }}>Penerima: <b>{selectedRecord.data?.party_name} ({selectedRecord.data?.category})</b></div>
+              <div style={{ color: "#EF4444", fontWeight: 700, marginTop: 2 }}>
+                Sisa Belum Diganti: {fmt(selectedRecord.data?.remaining_amount !== undefined ? selectedRecord.data?.remaining_amount : selectedRecord.data?.original_amount)}
+              </div>
+            </div>
+
+            {/* Quick Amount Chips */}
+            <div style={{ display: "flex", gap: 6, marginBottom: 12, overflowX: "auto" }}>
+              {[1000000, 3000000, 5000000, 10000000].map(val => (
+                <button
+                  key={val}
+                  type="button"
+                  onClick={() => setPayAmount(String(val))}
+                  style={{ padding: "6px 10px", borderRadius: 6, border: "1px solid #E2E8F0", background: "#F1F5F9", fontSize: 11, fontWeight: 700, cursor: "pointer" }}
+                >
+                  +{fmtK(val)}
+                </button>
+              ))}
+              <button
+                type="button"
+                onClick={() => setPayAmount(String(selectedRecord.data?.remaining_amount !== undefined ? selectedRecord.data?.remaining_amount : selectedRecord.data?.original_amount))}
+                style={{ padding: "6px 10px", borderRadius: 6, border: "1px solid #7C3AED", background: "#F5F3FF", color: "#7C3AED", fontSize: 11, fontWeight: 800, cursor: "pointer", whiteSpace: "nowrap" }}
+              >
+                Lunas Penuh
+              </button>
+            </div>
+
+            <div style={{ marginBottom: 12 }}>
+              <label style={{ fontSize: 12, fontWeight: 700, color: "#64748B", display: "block", marginBottom: 4 }}>Nominal Bayar (Rp) *</label>
+              <input
+                type="number"
+                value={payAmount}
+                onChange={e => setPayAmount(e.target.value)}
+                placeholder="0"
+                style={{ width: "100%", padding: "12px 14px", border: "1.5px solid #CBD5E1", borderRadius: 10, fontSize: 18, fontWeight: 800, color: "#7C3AED", boxSizing: "border-box" }}
+              />
+            </div>
+
+            <div style={{ marginBottom: 12 }}>
+              <label style={{ fontSize: 12, fontWeight: 700, color: "#64748B", display: "block", marginBottom: 4 }}>Metode Pembayaran</label>
+              <select
+                value={payMethod}
+                onChange={e => setPayMethod(e.target.value)}
+                style={{ width: "100%", padding: "10px 12px", border: "1.5px solid #CBD5E1", borderRadius: 10, fontSize: 14, boxSizing: "border-box" }}
+              >
+                <option value="Transfer">Transfer Bank</option>
+                <option value="Cash">Kas Tunai Resto</option>
+                <option value="QRIS">QRIS</option>
+                <option value="Lainnya">Lainnya</option>
+              </select>
+            </div>
+
+            <div style={{ marginBottom: 16 }}>
+              <label style={{ fontSize: 12, fontWeight: 700, color: "#64748B", display: "block", marginBottom: 4 }}>Catatan (Opsional)</label>
+              <input
+                type="text"
+                value={payNotes}
+                onChange={e => setPayNotes(e.target.value)}
+                placeholder="Contoh: Pengembalian dari profit kas..."
+                style={{ width: "100%", padding: "10px 12px", border: "1.5px solid #CBD5E1", borderRadius: 10, fontSize: 13, boxSizing: "border-box" }}
+              />
+            </div>
+
+            <button
+              onClick={handlePayback}
+              disabled={saving || !payAmount}
+              style={{ width: "100%", padding: "14px", borderRadius: 10, background: "#7C3AED", color: "#fff", border: "none", fontWeight: 800, fontSize: 15, cursor: "pointer" }}
+            >
+              {saving ? "Menyimpan..." : "Simpan Pengembalian"}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL: MOBILE ADD RECORD */}
+      {showAddModal && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.55)", zIndex: 9999, display: "flex", alignItems: "flex-end", justifyContent: "center" }} onClick={() => setShowAddModal(false)}>
+          <div style={{ background: "#fff", width: "100%", maxWidth: 440, borderRadius: "20px 20px 0 0", padding: 20, maxHeight: "90vh", overflowY: "auto" }} onClick={e => e.stopPropagation()}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
+              <div style={{ fontWeight: 800, fontSize: 16, color: "#1E293B" }}>
+                + Catat Utang / Talangan Baru
+              </div>
+              <button onClick={() => setShowAddModal(false)} style={{ background: "none", border: "none", fontSize: 20, cursor: "pointer", color: "#94A3B8" }}>✕</button>
+            </div>
+
+            <div style={{ marginBottom: 12 }}>
+              <label style={{ fontSize: 12, fontWeight: 700, color: "#64748B", display: "block", marginBottom: 4 }}>Tipe Catatan</label>
+              <select
+                value={addForm.type}
+                onChange={e => setAddForm({ ...addForm, type: e.target.value, party_name: e.target.value === "talangan_owner" ? "Claudy" : "" })}
+                style={{ width: "100%", padding: "10px 12px", border: "1.5px solid #CBD5E1", borderRadius: 10, fontSize: 14, boxSizing: "border-box" }}
+              >
+                <option value="talangan_owner">👑 Dana Talangan Claudy (Owner's Loan)</option>
+                <option value="utang">💸 Utang Usaha / Supplier</option>
+                <option value="piutang">📥 Piutang Katering / Pelanggan</option>
+              </select>
+            </div>
+
+            <div style={{ marginBottom: 12 }}>
+              <label style={{ fontSize: 12, fontWeight: 700, color: "#64748B", display: "block", marginBottom: 4 }}>Nama Pihak *</label>
+              <input
+                type="text"
+                value={addForm.party_name}
+                onChange={e => setAddForm({ ...addForm, party_name: e.target.value })}
+                placeholder="Nama pihak/supplier..."
+                style={{ width: "100%", padding: "10px 12px", border: "1.5px solid #CBD5E1", borderRadius: 10, fontSize: 14, boxSizing: "border-box" }}
+              />
+            </div>
+
+            <div style={{ marginBottom: 12 }}>
+              <label style={{ fontSize: 12, fontWeight: 700, color: "#64748B", display: "block", marginBottom: 4 }}>Kategori / Bulan</label>
+              <input
+                type="text"
+                value={addForm.category}
+                onChange={e => setAddForm({ ...addForm, category: e.target.value })}
+                placeholder="Contoh: Talangan Gaji, Utang Daging..."
+                style={{ width: "100%", padding: "10px 12px", border: "1.5px solid #CBD5E1", borderRadius: 10, fontSize: 14, boxSizing: "border-box" }}
+              />
+            </div>
+
+            <div style={{ marginBottom: 12 }}>
+              <label style={{ fontSize: 12, fontWeight: 700, color: "#64748B", display: "block", marginBottom: 4 }}>Nominal (Rp) *</label>
+              <input
+                type="number"
+                value={addForm.amount}
+                onChange={e => setAddForm({ ...addForm, amount: e.target.value })}
+                placeholder="0"
+                style={{ width: "100%", padding: "10px 12px", border: "1.5px solid #CBD5E1", borderRadius: 10, fontSize: 16, fontWeight: 700, boxSizing: "border-box" }}
+              />
+            </div>
+
+            <div style={{ marginBottom: 16 }}>
+              <label style={{ fontSize: 12, fontWeight: 700, color: "#64748B", display: "block", marginBottom: 4 }}>Catatan / Rincian</label>
+              <input
+                type="text"
+                value={addForm.notes}
+                onChange={e => setAddForm({ ...addForm, notes: e.target.value })}
+                placeholder="Keterangan singkat..."
+                style={{ width: "100%", padding: "10px 12px", border: "1.5px solid #CBD5E1", borderRadius: 10, fontSize: 13, boxSizing: "border-box" }}
+              />
+            </div>
+
+            <button
+              onClick={handleAddRecord}
+              disabled={saving || !addForm.party_name || !addForm.amount}
+              style={{ width: "100%", padding: "14px", borderRadius: 10, background: "#7C3AED", color: "#fff", border: "none", fontWeight: 800, fontSize: 15, cursor: "pointer" }}
+            >
+              {saving ? "Menyimpan..." : "Simpan Catatan"}
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
 /* ─── PIN Screen ─── */
 function PinScreen({ onAuth }) {
   const [pin, setPin] = useState("")
@@ -934,6 +1509,7 @@ function PinScreen({ onAuth }) {
 /* ─── NAV items ─── */
 const NAV = [
   {id:"dashboard",label:"Dashboard",icon:<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>},
+  {id:"debts",    label:"Utang & Modal",icon:<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="2" y="5" width="20" height="14" rx="2"/><line x1="2" y1="10" x2="22" y2="10"/></svg>},
   {id:"products", label:"Produk",    icon:<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/></svg>},
   {id:"staff",    label:"Karyawan",  icon:<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>},
   {id:"cashflow", label:"Arus Kas",  icon:<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>},
@@ -1168,7 +1744,13 @@ export default function OwnerApp() {
     return ()=>supabase.removeChannel(ch)
   },[])
 
-  const SCREEN_TITLE = {dashboard:"Dashboard",products:"Produk",staff:"Karyawan",cashflow:"Arus Kas"}
+  const SCREEN_TITLE = {
+    dashboard: "Dashboard",
+    debts: "Utang & Modal",
+    products: "Produk",
+    staff: "Karyawan",
+    cashflow: "Arus Kas"
+  }
 
   if (!authed) return <PinScreen onAuth={()=>{ sessionStorage.setItem('owner-authed','1'); setAuthed(true) }}/>
 
@@ -1232,6 +1814,7 @@ export default function OwnerApp() {
 
           <div className="owner-content" ref={contentRef}>
             {screen==="dashboard"&&<ScreenDashboard range={range} setRange={setRange} customDate={customDate} setCustomDate={setCustomDate} customDateTo={customDateTo} setCustomDateTo={setCustomDateTo} loading={loading} lastUpdated={lastUpdated} onRefresh={refresh} stats={stats} hourData={hourData} payments={payments} topItems={topItems} topDrinkItems={topDrinkItems} slowItems={slowItems} recent={recent}/>}
+            {screen==="debts"    &&<ScreenDebtEquity />}
             {screen==="products" &&<ScreenProducts topItems={topItems} topDrinkItems={topDrinkItems}/>}
             {screen==="staff"    &&<ScreenStaff staffData={staffData} stats={stats} staffList={staffList} todayAtt={todayAtt} range={range} setRange={setRange} customDate={customDate} setCustomDate={setCustomDate} customDateTo={customDateTo} setCustomDateTo={setCustomDateTo}/>}
             {screen==="cashflow" &&<ScreenCashFlow cashData={cashData}/>}
