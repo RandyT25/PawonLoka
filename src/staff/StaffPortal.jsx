@@ -769,8 +769,8 @@ export default function StaffPortal() {
     <div style={s.wrap}>
       <datalist id="uom-options">{UOM_OPTIONS.map(u=><option key={u} value={u}/>)}</datalist>
       <div style={s.header}>
-        <div style={{ fontSize:18, fontWeight:800 }}>🧪 Trial / R&D</div>
         <button onClick={()=>setScreen("home")} style={s.backBtn}>←</button>
+        <span style={{ fontSize:17, fontWeight:800 }}>Trial / R&D</span>
       </div>
       <div style={s.body}>
         <div style={{ background:"#FEF3C7", padding:12, borderRadius:8, fontSize:12, color:"#92400E", marginBottom:16 }}>
