@@ -4,15 +4,15 @@ import { toBaseUnit, unitPriceFor } from "../../shared/unitConversion"
 
 function fmt(n) { return "Rp " + Number(n||0).toLocaleString("id-ID") }
 
-const TYPE_COLORS = { opname:"var(--brand)", waste:"var(--red)", consumption:"#F59E0B", production:"var(--green)", requisition:"#6554C0", receiving:"#0EA5E9" }
-const TYPE_ICONS  = { opname:"📋", waste:"🗑️", consumption:"🍽️", production:"🏭", requisition:"🛒", receiving:"📦" }
-const TYPE_LABELS = { opname:"Stock Count", waste:"Waste", consumption:"Staff Meal", production:"Production", requisition:"Request", receiving:"Receiving" }
+const TYPE_COLORS = { opname:"var(--brand)", waste:"var(--red)", consumption:"#F59E0B", production:"var(--green)", requisition:"#6554C0", receiving:"#0EA5E9", trial:"#6366F1" }
+const TYPE_ICONS  = { opname:"📋", waste:"🗑️", consumption:"🍽️", production:"🏭", requisition:"🛒", receiving:"📦", trial:"🧪" }
+const TYPE_LABELS = { opname:"Stock Count", waste:"Waste", consumption:"Staff Meal", production:"Production", requisition:"Request", receiving:"Receiving", trial:"Trial / R&D" }
 
 // The stock_movements.type value that approveOne() writes for each stock-affecting
 // submission type when it actually runs. Used to detect submissions marked "approved"
 // whose data never went through approveOne() (e.g. a manual DB edit) — requisition is
 // intentionally excluded since it never touches stock.
-const EXPECTED_MOVEMENT_TYPE = { opname:"Adjustment", waste:"Waste", consumption:"Staff Meal", production:"Production" }
+const EXPECTED_MOVEMENT_TYPE = { opname:"Adjustment", waste:"Waste", consumption:"Staff Meal", production:"Production", trial:"Trial / R&D" }
 
 function IngSearchEdit({ ingredients, onSelect }) {
   const [q, setQ] = useState("")
@@ -421,6 +421,41 @@ export default function StaffSubmissions() {
           total_variance:sub.data.items.reduce((a,i)=>a+(i.diff*(ingredients.find(x=>x.id===i.ingredient_id)?.cost_per_unit||0)),0)
         })
         if (opnErr) throw opnErr
+
+      } else if (sub.type==="trial") {
+        const d = sub.data || sub.details
+        const trialDate = (sub.submitted_at||new Date().toISOString()).slice(0,10)
+        let totalCost = 0
+        for (const item of d.items||[]) {
+          const ing = ingredients.find(i=>i.id===item.ingredient_id)
+          if (ing) {
+            const { data:freshIng } = await supabase.from("ingredients").select("stock").eq("id",ing.id).maybeSingle()
+            const newStock = Math.max(0, (freshIng?.stock ?? ing.stock ?? 0) - item.qty)
+            await supabase.from("ingredients").update({ stock:newStock }).eq("id",ing.id)
+            totalCost += (item.qty * (ing.cost_per_unit||0))
+            await supabase.from("stock_movements").insert({
+              id:"MOV-"+Date.now()+"-"+Math.random().toString(36).slice(2,6),
+              type:"Trial / R&D", ingredient_id:ing.id, ingredient_name:ing.name,
+              qty:-item.qty, unit:item.unit, ref:sub.id,
+              note:"Trial Menu by "+sub.submitted_by+": "+(d.trialName||""),
+              date:trialDate,
+              time:new Date().toLocaleTimeString("id-ID",{hour:"2-digit",minute:"2-digit"})
+            })
+          }
+        }
+        await supabase.from("expenses").insert({
+          id: Date.now(),
+          date: trialDate,
+          description: "Trial Menu: " + (d.trialName||"Trial"),
+          cat: "R&D / Trial Menu",
+          amount: totalCost,
+          status: "Paid",
+          auto_source: "trial",
+          source_id: sub.id,
+          payment_method: "Non-Cash",
+          staff_name: sub.submitted_by,
+          time: new Date().toLocaleTimeString("id-ID",{hour:"2-digit",minute:"2-digit"})
+        })
       } else if (sub.type==="waste") {
         const d = sub.data
         const ing = ingredients.find(i=>i.id===d.ingredient_id)
@@ -826,7 +861,9 @@ export default function StaffSubmissions() {
                 const c = TYPE_COLORS[s.type]||"var(--ink5)"
                 const reqTotal = (s.data.items||[]).reduce((a,item)=>a+(item.qty*unitPriceFor(ingredients.find(x=>x.id===item.ingredient_id),item.unit)),0)
                 const opnameVariance = (s.data.items||[]).reduce((a,item)=>a+(item.diff*(ingredients.find(x=>x.id===item.ingredient_id)?.cost_per_unit||0)),0)
+const trialTotal = s.type==="trial" ? (s.data.items||(s.details||{}).items||[]).reduce((a,item)=>a+(item.qty*unitPriceFor(ingredients.find(x=>x.id===item.ingredient_id),item.unit)),0) : 0
                 const summary = s.type==="opname" ? (s.data.items||[]).length+" items counted — "+fmt(opnameVariance)+" variance"
+                  : s.type==="trial" ? (s.data.items||(s.details||{}).items||[]).length+" items used — "+fmt(trialTotal)+" total"
                   : s.type==="waste" ? s.data.qty+" "+s.data.unit+" — "+s.data.ingredient_name
                   : s.type==="consumption" ? s.data.qty+" "+s.data.unit+" — "+s.data.ingredient_name
                   : s.type==="requisition" ? (s.data.items||[]).length+" items requested — "+fmt(reqTotal)+" total"
@@ -974,6 +1011,48 @@ export default function StaffSubmissions() {
                   ))}
                 </div>
               )}
+
+              {viewModal.type==="trial" && (() => {
+                const d = viewModal.data || viewModal.details
+                let totalCost = 0
+                return (
+                  <div style={{ display:"grid", gap:14 }}>
+                    {[["Date",(viewModal.submitted_at||"").slice(0,10)], ["Trial Name",d.trialName], ["Notes",d.notes||"—"]].map(([k,v])=>(
+                      <div key={k}><div style={{ fontSize:11, color:"var(--ink4)", fontWeight:700, textTransform:"uppercase" }}>{k}</div><div style={{ fontWeight:600, marginTop:3 }}>{v}</div></div>
+                    ))}
+                    <div>
+                      <div style={{ fontSize:11, color:"var(--ink4)", fontWeight:700, textTransform:"uppercase", marginBottom:6 }}>Ingredients Used</div>
+                      <table className="bo-table" style={{ width:"100%" }}>
+                        <thead>
+                          <tr><th>Ingredient</th><th>Qty</th><th>Unit Price</th><th>Cost</th></tr>
+                        </thead>
+                        <tbody>
+                          {(d.items||[]).map((item,i) => {
+                            const ing = ingredients.find(x=>x.id===item.ingredient_id)
+                            const unitPrice = unitPriceFor(ing, item.unit)
+                            const cost = item.qty * unitPrice
+                            totalCost += cost
+                            return (
+                              <tr key={i}>
+                                <td>{item.ingredient_name || (ing?ing.name:"Unknown")}</td>
+                                <td>{item.qty} {item.unit}</td>
+                                <td>{fmt(unitPrice)}</td>
+                                <td style={{ fontWeight:600 }}>{fmt(cost)}</td>
+                              </tr>
+                            )
+                          })}
+                        </tbody>
+                        <tfoot>
+                          <tr>
+                            <td colSpan={3} style={{ textAlign:"right", fontWeight:700 }}>Total Trial Cost</td>
+                            <td style={{ fontWeight:800, color:"#6366F1" }}>{fmt(totalCost)}</td>
+                          </tr>
+                        </tfoot>
+                      </table>
+                    </div>
+                  </div>
+                )
+              })()}
               {viewModal.type==="receiving" && (
                 <div style={{ display:"grid", gap:14 }}>
                   {[["Date",viewModal.data.date||"—"],["Supplier",viewModal.data.supplier_name||"—"],["Invoice Total",fmt(viewModal.data.invoice_total)],["Notes",viewModal.data.notes||"—"]].map(([k,v])=>(

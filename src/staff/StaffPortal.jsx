@@ -43,9 +43,9 @@ const STATION_DEPTS = {
 }
 
 const MENUS = {
-  Kitchen: ["opname","waste","production","requisition"],
-  Snack:   ["opname","waste","production","requisition"],
-  Bar:     ["opname","waste","production","requisition"],
+  Kitchen: ["opname","waste","production","requisition","trial"],
+  Snack:   ["opname","waste","production","requisition","trial"],
+  Bar:     ["opname","waste","production","requisition","trial"],
   Kasir:   ["requisition"],
 }
 
@@ -55,6 +55,8 @@ const MENU_ITEMS = [
   { screen:"consumption", icon:"🍽️", label:"Staff Meal / Personal Use", sub:"Log food or drink you took for yourself", bg:"#F59E0B" },
   { screen:"production",  icon:"🏭", label:"Production Batch",    sub:"Record what was produced today",    bg:"#00875A" },
   { screen:"requisition", icon:"🛒", label:"Request Ingredients", sub:"Request items needed for today",    bg:"#374151" },
+  { screen:"trial",       icon:"🧪", label:"Trial Menu / R&D",  sub:"Record testing new recipes or photoshoots", bg:"#6366F1" },
+  { screen:"trial",       icon:"🧪", label:"Trial Menu / R&D",  sub:"Record testing new recipes or photoshoots", bg:"#6366F1" },
 ]
 
 function SearchableSelect({ options, value, onChange, placeholder, labelKey="name", valueKey="id" }) {
@@ -138,6 +140,7 @@ export default function StaffPortal() {
   const [staffName,    setStaffName]    = useState("")
   const [wasteForm,    setWasteForm]    = useState({ ingredient_id:"", qty:"", reason:"Expired", notes:"", date:new Date().toISOString().slice(0,10) })
   const [consumptionForm, setConsumptionForm] = useState({ ingredient_id:"", qty:"", notes:"", date:new Date().toISOString().slice(0,10) })
+  const [trialForm, setTrialForm] = useState({ trialName:"", notes:"", items:[{ingredient_id:"", qty:"", unit:""}] })
   const [prodType,     setProdType]     = useState("") // 'sub' | 'product'
   const [prodSubId,    setProdSubId]    = useState("")
   const [prodProductSku, setProdProductSku] = useState("")
@@ -721,6 +724,52 @@ export default function StaffPortal() {
       </div>
     )
   }
+
+  
+  if (screen==="trial") return (
+    <div style={s.wrap}>
+      <div style={s.header}>
+        <div style={{ fontSize:18, fontWeight:800 }}>🧪 Trial / R&D</div>
+        <button onClick={()=>setScreen("home")} style={s.backBtn}>←</button>
+      </div>
+      <div style={s.body}>
+        <div style={{ background:"#FEF3C7", padding:12, borderRadius:8, fontSize:12, color:"#92400E", marginBottom:16 }}>
+          Mencatat bahan untuk testing resep baru, foto menu, dll. Tidak masuk ke penjualan atau waste.
+        </div>
+        <div style={{ marginBottom:14 }}>
+          <div style={s.label}>Nama Menu/Trial *</div>
+          <input type="text" value={trialForm.trialName} onChange={e=>setTrialForm({...trialForm, trialName:e.target.value})} placeholder="Contoh: Sambal Matah V2" style={{...s.input, padding:"12px 14px", fontSize:15}} />
+        </div>
+        <div style={{ marginBottom:14 }}>
+          <div style={s.label}>Catatan (Opsional)</div>
+          <input type="text" value={trialForm.notes} onChange={e=>setTrialForm({...trialForm, notes:e.target.value})} placeholder="Contoh: Photoshoot GoFood" style={{...s.input, padding:"12px 14px", fontSize:15}} />
+        </div>
+        
+        <div style={s.label}>Bahan Baku Yang Dipakai *</div>
+        <div style={{ ...s.card, padding:10 }}>
+          {trialForm.items.map((item, i) => {
+            const selIng = ingredients.find(x=>x.id===item.ingredient_id)
+            const unitOptions = selIng ? [selIng.unit, ...(selIng.conversions||[]).map(c=>c.unit)].filter((u,idx,arr)=>u&&arr.indexOf(u)===idx) : []
+            return (
+              <div key={i} style={{ display:"grid", gridTemplateColumns:"1fr 70px 60px 28px", gap:6, marginBottom:10, alignItems:"center" }}>
+                <SearchableSelect options={ingredients} value={item.ingredient_id} onChange={v=>{ const ing=ingredients.find(x=>x.id===v); setTrialForm(prev=>{ const newArr=[...prev.items]; newArr[i]={...newArr[i], ingredient_id:v, unit:biggestUnit(ing)}; return {...prev, items:newArr} }) }} placeholder="Cari bahan..." />
+                <input type="number" inputMode="decimal" value={item.qty} onChange={e=>setTrialForm(prev=>{ const newArr=[...prev.items]; newArr[i]={...newArr[i], qty:e.target.value}; return {...prev, items:newArr} })} style={{ ...s.input, padding:"10px 8px", fontSize:14, textAlign:"center" }} placeholder="0" />
+                {unitOptions.length>0
+                  ? <select value={item.unit} onChange={e=>setTrialForm(prev=>{ const newArr=[...prev.items]; newArr[i]={...newArr[i], unit:e.target.value}; return {...prev, items:newArr} })} style={{ ...s.input, padding:"10px 6px", fontSize:13, textAlign:"center" }}>
+                      {unitOptions.map(u=><option key={u} value={u}>{u}</option>)}
+                    </select>
+                  : <input value={item.unit} onChange={e=>setTrialForm(prev=>{ const newArr=[...prev.items]; newArr[i]={...newArr[i], unit:e.target.value}; return {...prev, items:newArr} })} style={{ ...s.input, padding:"10px 6px", fontSize:13, textAlign:"center" }} placeholder="kg" />
+                }
+                {trialForm.items.length>1 ? <button onClick={()=>setTrialForm(prev=>{ const newArr=prev.items.filter((_,idx)=>idx!==i); return {...prev, items:newArr} })} style={{ background:"none", border:"none", color:"#DE350B", fontSize:18, cursor:"pointer", padding:0 }}>✕</button> : <div/>}
+              </div>
+            )
+          })}
+          <button onClick={()=>setTrialForm(prev=>({...prev, items:[...prev.items, {ingredient_id:"", qty:"", unit:""}]}))} style={{ width:"100%", padding:12, background:"#F1F5F9", border:"1px dashed #cbd5e1", borderRadius:8, color:"#475569", fontWeight:600, cursor:"pointer", marginTop:4 }}>+ Tambah Bahan Lain</button>
+        </div>
+        <button onClick={submitTrial} disabled={saving} style={{ ...s.btn, background:"#6366F1", color:"#fff", marginTop:16 }}>{saving?"Submitting...":"Kirim Trial Menu"}</button>
+      </div>
+    </div>
+  )
 
   if (screen==="requisition") return (
     <div style={s.wrap}>
