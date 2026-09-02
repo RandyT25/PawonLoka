@@ -130,6 +130,7 @@ export default function StaffPortal() {
   const [subRecipes,   setSubRecipes]   = useState([])
   const [subRecipeIngs,setSubRecipeIngs]= useState([])
   const [frozenProducts, setFrozenProducts] = useState([])
+  const [allProducts, setAllProducts] = useState([])
   const [frozenRecipes,  setFrozenRecipes]  = useState([])
   const [saving,       setSaving]       = useState(false)
   const [done,         setDone]         = useState(false)
@@ -189,33 +190,37 @@ export default function StaffPortal() {
 
   async function loadData() {
     // Load from cache immediately for offline startup
-    const [cachedIngs, cachedSubs, cachedSubIngs, cachedFrozenProds, cachedFrozenRecipes] = await Promise.all([
+    const [cachedIngs, cachedSubs, cachedSubIngs, cachedFrozenProds, cachedAllProds, cachedFrozenRecipes] = await Promise.all([
       offlineStore.getCache('ingredients'),
       offlineStore.getCache('sub_recipes'),
       offlineStore.getCache('sub_recipe_ingredients'),
       offlineStore.getCache('frozen_products'),
+      offlineStore.getCache('all_products'),
       offlineStore.getCache('recipes'),
     ])
     if (cachedIngs?.length)   { setIngredientsById(Object.fromEntries(cachedIngs.map(i=>[i.id,i]))); setIngredients(cachedIngs.filter(i => !i.name.includes("(sub)"))); setOpnameCounts(cachedIngs.map(i=>({ ingredient_id:i.id, name:i.name, unit:i.unit, conversions:i.conversions||[], input_unit:i.unit, system_qty:i.stock||0, actual_qty:"" }))) }
     if (cachedSubs?.length)   setSubRecipes(cachedSubs)
     if (cachedSubIngs?.length) setSubRecipeIngs(cachedSubIngs)
     if (cachedFrozenProds?.length) setFrozenProducts(cachedFrozenProds)
+    if (cachedAllProds?.length) setAllProducts(cachedAllProds)
     if (cachedFrozenRecipes?.length) setFrozenRecipes(cachedFrozenRecipes)
     if ((stationStaff[station]||[]).length === 1) setStaffName(stationStaff[station][0])
 
     // Refresh from Supabase in background
     try {
-      const [{ data:ings }, { data:subs }, { data:subIngs }, { data:frozenProds }, { data:allRecipes }] = await Promise.all([
+      const [{ data:ings }, { data:subs }, { data:subIngs }, { data:frozenProds }, { data:allProds }, { data:allRecipes }] = await Promise.all([
         supabase.from("ingredients").select("id,name,unit,stock,cost_per_unit,supplier,station,conversions").order("name"),
         supabase.from("sub_recipes").select("*").order("name"),
         supabase.from("sub_recipe_ingredients").select("*"),
         supabase.from("products").select("sku,name,cat,price").eq("cat","Frozen Food").eq("active",true).order("name"),
+        supabase.from("products").select("sku,name,cat").eq("active",true).order("name"),
         supabase.from("recipes").select("product_id,ingredient_id,qty,unit,ingredient_name"),
       ])
       if (ings)    { setIngredientsById(Object.fromEntries(ings.map(i=>[i.id,i]))); setIngredients(ings.filter(i => !i.name.includes("(sub)"))); setOpnameCounts(ings.map(i=>({ ingredient_id:i.id, name:i.name, unit:i.unit, conversions:i.conversions||[], input_unit:i.unit, system_qty:i.stock||0, actual_qty:"" }))); offlineStore.setCache('ingredients', ings) }
       if (subs)    { setSubRecipes(subs); offlineStore.setCache('sub_recipes', subs) }
       if (subIngs) { setSubRecipeIngs(subIngs); offlineStore.setCache('sub_recipe_ingredients', subIngs) }
       if (frozenProds) { setFrozenProducts(frozenProds); offlineStore.setCache('frozen_products', frozenProds) }
+      if (allProds) { setAllProducts(allProds); offlineStore.setCache('all_products', allProds) }
       if (allRecipes)   { setFrozenRecipes(allRecipes); offlineStore.setCache('recipes', allRecipes) }
     } catch { /* offline — already loaded from cache */ }
   }
@@ -759,7 +764,10 @@ export default function StaffPortal() {
         </div>
         <div style={{ marginBottom:14 }}>
           <div style={s.label}>Nama Menu/Trial *</div>
-          <input type="text" value={trialForm.trialName} onChange={e=>setTrialForm({...trialForm, trialName:e.target.value})} placeholder="Contoh: Sambal Matah V2" style={{...s.input, padding:"12px 14px", fontSize:15}} />
+          <input list="menu-options" type="text" value={trialForm.trialName} onChange={e=>setTrialForm({...trialForm, trialName:e.target.value})} placeholder="Pilih menu atau ketik nama trial baru..." style={{...s.input, padding:"12px 14px", fontSize:15}} />
+          <datalist id="menu-options">
+            {allProducts.map(p => <option key={p.sku} value={p.name} />)}
+          </datalist>
         </div>
         <div style={{ marginBottom:14 }}>
           <div style={s.label}>Catatan (Opsional)</div>
