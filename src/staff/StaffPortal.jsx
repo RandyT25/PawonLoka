@@ -8,7 +8,7 @@ function fmt(n) { return Number(n||0).toLocaleString("id-ID") }
 function toBaseUnit(ing, qty, unit) {
   if (!ing || unit === ing.unit) return qty
   const conv = (ing.conversions||[]).find(c => c.unit === unit)
-  if (conv && parseFloat(conv.qty) > 0) return qty * parseFloat(conv.qty)
+  if (conv && parseNum(conv.qty) > 0) return qty * parseNum(conv.qty)
   const fallbacks = { kg:1000, L:1000, Galon:19000 }
   if (ing.unit==="gr" && fallbacks[unit]) return qty * fallbacks[unit]
   if (ing.unit==="ml" && fallbacks[unit]) return qty * fallbacks[unit]
@@ -22,9 +22,11 @@ function biggestUnit(ing) {
   if (!ing) return ""
   const convs = ing.conversions || []
   if (!convs.length) return ing.unit
-  return convs.reduce((max, c) => (parseFloat(c.qty)||0) > (parseFloat(max.qty)||0) ? c : max, convs[0]).unit || ing.unit
+  return convs.reduce((max, c) => (parseNum(c.qty)||0) > (parseNum(max.qty)||0) ? c : max, convs[0]).unit || ing.unit
 }
 const REASONS = ["Expired","Damaged","Overproduction","Spillage","Other"]
+
+const parseNum = (v) => parseNum(String(v).replace(",",".")) || 0
 
 const STATIONS = {
   Kitchen:    { color:"#00875A" },
@@ -72,6 +74,8 @@ function SearchableSelect({ options, value, onChange, placeholder, labelKey="nam
     const label = o[labelKey] || o
     return !search || label.toLowerCase().includes(search.toLowerCase())
   })
+  const UOM_OPTIONS = ["kg", "gr", "L", "ml", "pcs", "pack", "ikat", "btg", "lbr", "porsi", "bks", "kaleng", "botol", "cup"]
+
   const s = {
     wrap: { position:"relative" },
     trigger: { width:"100%", padding:"11px 13px", border:"1.5px solid #e0e0e0", borderRadius:10, fontSize:15, boxSizing:"border-box", fontFamily:"inherit", background:"#fff", textAlign:"left", cursor:"pointer", display:"flex", justifyContent:"space-between", alignItems:"center" },
@@ -281,7 +285,7 @@ export default function StaffPortal() {
     const filled = opnameCounts.filter(i=>i.actual_qty!=="")
     if (!filled.length) { alert("Enter at least one count"); return }
     await submit("opname", { date:opnameDate||new Date().toISOString().slice(0,10), items:filled.map(i=>{
-      const enteredQty = parseFloat(i.actual_qty)||0
+      const enteredQty = parseNum(i.actual_qty)||0
       const ing = ingredients.find(x=>x.id===i.ingredient_id)
       const actual_qty = toBaseUnit(ing, enteredQty, i.input_unit||i.unit)
       return { ...i, entered_qty:enteredQty, entered_unit:i.input_unit||i.unit, actual_qty, diff:actual_qty-i.system_qty }
@@ -291,22 +295,22 @@ export default function StaffPortal() {
   async function submitWaste() {
     const ing = ingredientsById[wasteForm.ingredient_id]
     if (!ing||!wasteForm.qty) { alert("Select ingredient and quantity"); return }
-    await submit("waste", { ingredient_id:ing.id, ingredient_name:ing.name, qty:parseFloat(wasteForm.qty), unit:ing.unit, reason:wasteForm.reason, notes:wasteForm.notes, date:wasteForm.date||new Date().toISOString().slice(0,10), estimated_cost:(parseFloat(wasteForm.qty)||0)*(ing.cost_per_unit||0) })
+    await submit("waste", { ingredient_id:ing.id, ingredient_name:ing.name, qty:parseNum(wasteForm.qty), unit:ing.unit, reason:wasteForm.reason, notes:wasteForm.notes, date:wasteForm.date||new Date().toISOString().slice(0,10), estimated_cost:(parseNum(wasteForm.qty)||0)*(ing.cost_per_unit||0) })
   }
 
   async function submitConsumption() {
     const ing = ingredientsById[consumptionForm.ingredient_id]
     if (!ing||!consumptionForm.qty) { alert("Select ingredient and quantity"); return }
-    await submit("consumption", { ingredient_id:ing.id, ingredient_name:ing.name, qty:parseFloat(consumptionForm.qty), unit:ing.unit, notes:consumptionForm.notes, date:consumptionForm.date||new Date().toISOString().slice(0,10), estimated_cost:(parseFloat(consumptionForm.qty)||0)*(ing.cost_per_unit||0) })
+    await submit("consumption", { ingredient_id:ing.id, ingredient_name:ing.name, qty:parseNum(consumptionForm.qty), unit:ing.unit, notes:consumptionForm.notes, date:consumptionForm.date||new Date().toISOString().slice(0,10), estimated_cost:(parseNum(consumptionForm.qty)||0)*(ing.cost_per_unit||0) })
   }
 
   async function submitProduction() {
     if (prodType === "product") {
       if (!prodProductSku) { alert("Pilih item terlebih dahulu"); return }
-      if (!prodBatchQty || parseFloat(prodBatchQty) <= 0) { alert("Masukkan jumlah pack"); return }
+      if (!prodBatchQty || parseNum(prodBatchQty) <= 0) { alert("Masukkan jumlah pack"); return }
       const product = frozenProducts.find(p => p.sku === prodProductSku)
       const lines   = frozenRecipes.filter(l => l.product_id === prodProductSku)
-      const packs   = parseFloat(prodBatchQty)
+      const packs   = parseNum(prodBatchQty)
       const ingredients_used = lines.map(l => {
         const ing = ingredientsById[l.ingredient_id]
         return { ingredient_id:l.ingredient_id, name:ing?.name||l.ingredient_name||"", qty:Math.round(l.qty*packs*100)/100, unit:l.unit||ing?.unit||"" }
@@ -329,10 +333,10 @@ export default function StaffPortal() {
       return
     }
     if (!prodSubId) { alert("Pilih resep terlebih dahulu"); return }
-    if (!prodBatchQty || parseFloat(prodBatchQty) <= 0) { alert("Masukkan jumlah batch"); return }
+    if (!prodBatchQty || parseNum(prodBatchQty) <= 0) { alert("Masukkan jumlah batch"); return }
     const sub     = subRecipes.find(s => s.id === prodSubId)
     const lines   = subRecipeIngs.filter(l => l.sub_recipe_id === prodSubId)
-    const batches = parseFloat(prodBatchQty)
+    const batches = parseNum(prodBatchQty)
     const ingredients_used = lines.map(l => {
       const ing = ingredients.find(i => i.id === l.ingredient_id)
       return { ingredient_id:l.ingredient_id, name:ing?.name||"", qty:Math.round(l.qty*batches*100)/100, unit:l.unit||ing?.unit||"" }
@@ -364,7 +368,7 @@ export default function StaffPortal() {
         return {
           ingredient_id: it.ingredient_id,
           ingredient_name: ing?.name,
-          qty: parseFloat(it.qty),
+          qty: parseNum(it.qty),
           unit: it.unit
         }
       })
@@ -372,11 +376,11 @@ export default function StaffPortal() {
   }
 
   async function submitRequisition() {
-    const valid = reqItems.filter(i=>i.ingredient_id&&parseFloat(i.qty)>0)
+    const valid = reqItems.filter(i=>i.ingredient_id&&parseNum(i.qty)>0)
     if (!valid.length) { alert("Add at least one item"); return }
     await submit("requisition", {
       needed_by: reqDate, notes: reqNotes,
-      items: valid.map(i=>{ const ing=ingredients.find(x=>x.id===i.ingredient_id); return { ingredient_id:i.ingredient_id, ingredient_name:ing?.name||"", qty:parseFloat(i.qty), unit:i.unit||ing?.unit||"", supplier:ing?.supplier||"" } })
+      items: valid.map(i=>{ const ing=ingredients.find(x=>x.id===i.ingredient_id); return { ingredient_id:i.ingredient_id, ingredient_name:ing?.name||"", qty:parseNum(i.qty), unit:i.unit||ing?.unit||"", supplier:ing?.supplier||"" } })
     })
   }
 
@@ -393,6 +397,8 @@ export default function StaffPortal() {
   }
 
   const stationColor = station ? STATIONS[station].color : "#F59E0B"
+
+  const UOM_OPTIONS = ["kg", "gr", "L", "ml", "pcs", "pack", "ikat", "btg", "lbr", "porsi", "bks", "kaleng", "botol", "cup"]
 
   const s = {
     wrap:{ height:"100dvh", display:"flex", flexDirection:"column", background:"#f5f6fa", fontFamily:"system-ui,sans-serif", fontSize:15, overflow:"hidden" },
@@ -413,6 +419,7 @@ export default function StaffPortal() {
   // Station picker screen
   if (!station && screen !== "consumption") return (
     <div style={s.wrap}>
+      <datalist id="uom-options">{UOM_OPTIONS.map(u=><option key={u} value={u}/>)}</datalist>
       <div style={{ ...s.header, background:"#1a1a2e" }}><Logo /><span style={{ fontSize:17, fontWeight:800 }}>PawonLoka Staff</span></div>
       <div style={s.body}>
         <div style={{ ...s.card, marginTop:24 }}>
@@ -451,6 +458,7 @@ export default function StaffPortal() {
 
   if (done) return (
     <div style={s.wrap}>
+      <datalist id="uom-options">{UOM_OPTIONS.map(u=><option key={u} value={u}/>)}</datalist>
       <div style={s.header}><Logo /><span style={{ fontSize:17, fontWeight:800 }}>{station ? `${station} Station` : "PawonLoka Staff"}</span></div>
       <div style={{ ...s.body, textAlign:"center", paddingTop:60 }}>
         <div style={{ fontSize:56, marginBottom:16 }}>✅</div>
@@ -466,6 +474,7 @@ export default function StaffPortal() {
 
   if (screen==="home") return (
     <div style={s.wrap}>
+      <datalist id="uom-options">{UOM_OPTIONS.map(u=><option key={u} value={u}/>)}</datalist>
       <div style={s.header}>
         <Logo />
         <div style={{ flex:1 }}>
@@ -496,6 +505,7 @@ export default function StaffPortal() {
     const filledCount = opnameCounts.filter(i=>i.actual_qty!=="").length
     return (
       <div style={s.wrap}>
+      <datalist id="uom-options">{UOM_OPTIONS.map(u=><option key={u} value={u}/>)}</datalist>
         <div style={s.header}>
           <button onClick={()=>setScreen("home")} style={s.backBtn}>←</button>
           <div style={{ flex:1 }}>
@@ -526,7 +536,7 @@ export default function StaffPortal() {
                   <div style={{ fontSize:13, fontWeight:700, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{item.name}</div>
                   <div style={{ fontSize:11, color:"#888" }}>System: {fmt(item.system_qty)} {item.unit}</div>
                 </div>
-                <input type="number" inputMode="decimal" value={item.actual_qty}
+                <input type="text" inputMode="decimal" value={item.actual_qty}
                   onChange={e=>setOpnameCounts(prev=>prev.map((x,i)=>i===realIdx?{...x,actual_qty:e.target.value}:x))}
                   placeholder="—" style={{ ...s.input, width:76, textAlign:"center", padding:"9px 6px", fontSize:15, flexShrink:0, background:filled?"#f0fff8":"#fafafa", borderColor:filled?"#00875A":"#e0e0e0" }} />
                 {(item.conversions||[]).length > 0 ? (
@@ -554,6 +564,7 @@ export default function StaffPortal() {
 
   if (screen==="waste") return (
     <div style={s.wrap}>
+      <datalist id="uom-options">{UOM_OPTIONS.map(u=><option key={u} value={u}/>)}</datalist>
       <div style={s.header}>
         <button onClick={()=>setScreen("home")} style={s.backBtn}>←</button>
         <span style={{ fontSize:17, fontWeight:800 }}>Waste / Spoilage</span>
@@ -570,10 +581,10 @@ export default function StaffPortal() {
           <label style={s.label}>Ingredient / Sub-Recipe *</label>
           <SearchableSelect options={[...ingredients, ...subRecipeOptions].sort((a,b)=>a.name.localeCompare(b.name))} value={wasteForm.ingredient_id} onChange={v=>setWasteForm(f=>({...f,ingredient_id:v}))} placeholder="— Search ingredient or sub-recipe —" />
           <label style={{ ...s.label, marginTop:14 }}>Quantity *</label>
-          <input type="number" inputMode="decimal" value={wasteForm.qty} onChange={e=>setWasteForm(f=>({...f,qty:e.target.value}))} style={s.input} placeholder="0" />
+          <input type="text" inputMode="decimal" value={wasteForm.qty} onChange={e=>setWasteForm(f=>({...f,qty:e.target.value}))} style={s.input} placeholder="0" />
           {wasteForm.ingredient_id && wasteForm.qty && (
             <div style={{ marginTop:8, padding:"9px 13px", background:"#fff0ed", borderRadius:10, fontSize:13, color:"#DE350B", fontWeight:700 }}>
-              Est. Loss: Rp {fmt((parseFloat(wasteForm.qty)||0)*(ingredientsById[wasteForm.ingredient_id]?.cost_per_unit||0))}
+              Est. Loss: Rp {fmt((parseNum(wasteForm.qty)||0)*(ingredientsById[wasteForm.ingredient_id]?.cost_per_unit||0))}
             </div>
           )}
           <label style={{ ...s.label, marginTop:14 }}>Reason *</label>
@@ -592,6 +603,7 @@ export default function StaffPortal() {
 
   if (screen==="consumption") return (
     <div style={s.wrap}>
+      <datalist id="uom-options">{UOM_OPTIONS.map(u=><option key={u} value={u}/>)}</datalist>
       <div style={s.header}>
         <button onClick={()=>setScreen("home")} style={s.backBtn}>←</button>
         <span style={{ fontSize:17, fontWeight:800 }}>Staff Meal / Personal Use</span>
@@ -608,10 +620,10 @@ export default function StaffPortal() {
           <label style={s.label}>Ingredient / Sub-Recipe *</label>
           <SearchableSelect options={[...ingredients, ...subRecipeOptions].sort((a,b)=>a.name.localeCompare(b.name))} value={consumptionForm.ingredient_id} onChange={v=>setConsumptionForm(f=>({...f,ingredient_id:v}))} placeholder="— Search ingredient or sub-recipe —" />
           <label style={{ ...s.label, marginTop:14 }}>Quantity *</label>
-          <input type="number" inputMode="decimal" value={consumptionForm.qty} onChange={e=>setConsumptionForm(f=>({...f,qty:e.target.value}))} style={s.input} placeholder="0" />
+          <input type="text" inputMode="decimal" value={consumptionForm.qty} onChange={e=>setConsumptionForm(f=>({...f,qty:e.target.value}))} style={s.input} placeholder="0" />
           {consumptionForm.ingredient_id && consumptionForm.qty && (
             <div style={{ marginTop:8, padding:"9px 13px", background:"#fff8e6", borderRadius:10, fontSize:13, color:"#B45309", fontWeight:700 }}>
-              Est. Cost: Rp {fmt((parseFloat(consumptionForm.qty)||0)*(ingredientsById[consumptionForm.ingredient_id]?.cost_per_unit||0))}
+              Est. Cost: Rp {fmt((parseNum(consumptionForm.qty)||0)*(ingredientsById[consumptionForm.ingredient_id]?.cost_per_unit||0))}
             </div>
           )}
           <label style={{ ...s.label, marginTop:14 }}>Notes</label>
@@ -628,7 +640,7 @@ export default function StaffPortal() {
     const selectedSub     = prodType==="sub"     ? subRecipes.find(s => s.id === prodSubId) : null
     const selectedProduct = prodType==="product" ? frozenProducts.find(p => p.sku === prodProductSku) : null
     const selectedItem    = selectedSub || selectedProduct
-    const batchQty    = parseFloat(prodBatchQty) || 0
+    const batchQty    = parseNum(prodBatchQty) || 0
     const recipeLines = prodType==="product"
       ? (prodProductSku ? frozenRecipes.filter(l => l.product_id === prodProductSku) : [])
       : (prodSubId ? subRecipeIngs.filter(l => l.sub_recipe_id === prodSubId) : [])
@@ -647,6 +659,7 @@ export default function StaffPortal() {
 
     return (
       <div style={s.wrap}>
+      <datalist id="uom-options">{UOM_OPTIONS.map(u=><option key={u} value={u}/>)}</datalist>
         <div style={s.header}>
           <button onClick={()=>setScreen("home")} style={s.backBtn}>←</button>
           <span style={{ fontSize:17, fontWeight:800 }}>Production Batch</span>
@@ -693,9 +706,9 @@ export default function StaffPortal() {
           {/* Step 2 — Batch count */}
           {selectedItem && (
             <div style={s.card}>
-              <label style={{ ...s.label, marginBottom:10 }}>{prodType==="product" ? "Berapa pack yang dibuat hari ini? *" : "Berapa batch yang dibuat hari ini? *"}</label>
+              <label style={{ ...s.label, marginBottom:10 }}>{prodType==="product" ? "Berapa pack yang dibuat hari ini? *" : "Berapa resep yang dibuat hari ini? *"}</label>
               <input
-                type="number" inputMode="decimal"
+                type="text" inputMode="decimal"
                 value={prodBatchQty}
                 onChange={e => setProdBatchQty(e.target.value)}
                 style={{ ...s.input, fontSize:32, fontWeight:900, textAlign:"center", padding:18 }}
@@ -754,6 +767,7 @@ export default function StaffPortal() {
   
   if (screen==="trial") return (
     <div style={s.wrap}>
+      <datalist id="uom-options">{UOM_OPTIONS.map(u=><option key={u} value={u}/>)}</datalist>
       <div style={s.header}>
         <div style={{ fontSize:18, fontWeight:800 }}>🧪 Trial / R&D</div>
         <button onClick={()=>setScreen("home")} style={s.backBtn}>←</button>
@@ -782,12 +796,12 @@ export default function StaffPortal() {
             return (
               <div key={i} style={{ display:"grid", gridTemplateColumns:"1fr 70px 60px 28px", gap:6, marginBottom:10, alignItems:"center" }}>
                 <SearchableSelect options={ingredients} value={item.ingredient_id} onChange={v=>{ const ing=ingredients.find(x=>x.id===v); setTrialForm(prev=>{ const newArr=[...prev.items]; newArr[i]={...newArr[i], ingredient_id:v, unit:biggestUnit(ing)}; return {...prev, items:newArr} }) }} placeholder="Cari bahan..." />
-                <input type="number" inputMode="decimal" value={item.qty} onChange={e=>setTrialForm(prev=>{ const newArr=[...prev.items]; newArr[i]={...newArr[i], qty:e.target.value}; return {...prev, items:newArr} })} style={{ ...s.input, padding:"10px 8px", fontSize:14, textAlign:"center" }} placeholder="0" />
+                <input type="text" inputMode="decimal" value={item.qty} onChange={e=>setTrialForm(prev=>{ const newArr=[...prev.items]; newArr[i]={...newArr[i], qty:e.target.value}; return {...prev, items:newArr} })} style={{ ...s.input, padding:"10px 8px", fontSize:14, textAlign:"center" }} placeholder="0" />
                 {unitOptions.length>0
                   ? <select value={item.unit} onChange={e=>setTrialForm(prev=>{ const newArr=[...prev.items]; newArr[i]={...newArr[i], unit:e.target.value}; return {...prev, items:newArr} })} style={{ ...s.input, padding:"10px 6px", fontSize:13, textAlign:"center" }}>
                       {unitOptions.map(u=><option key={u} value={u}>{u}</option>)}
                     </select>
-                  : <input value={item.unit} onChange={e=>setTrialForm(prev=>{ const newArr=[...prev.items]; newArr[i]={...newArr[i], unit:e.target.value}; return {...prev, items:newArr} })} style={{ ...s.input, padding:"10px 6px", fontSize:13, textAlign:"center" }} placeholder="kg" />
+                  : <input list="uom-options" value={item.unit} onChange={e=>setTrialForm(prev=>{ const newArr=[...prev.items]; newArr[i]={...newArr[i], unit:e.target.value}; return {...prev, items:newArr} })} style={{ ...s.input, padding:"10px 6px", fontSize:13, textAlign:"center" }} placeholder="kg" />
                 }
                 {trialForm.items.length>1 ? <button onClick={()=>setTrialForm(prev=>{ const newArr=prev.items.filter((_,idx)=>idx!==i); return {...prev, items:newArr} })} style={{ background:"none", border:"none", color:"#DE350B", fontSize:18, cursor:"pointer", padding:0 }}>✕</button> : <div/>}
               </div>
@@ -802,6 +816,7 @@ export default function StaffPortal() {
 
   if (screen==="requisition") return (
     <div style={s.wrap}>
+      <datalist id="uom-options">{UOM_OPTIONS.map(u=><option key={u} value={u}/>)}</datalist>
       <div style={s.header}>
         <button onClick={()=>setScreen("home")} style={s.backBtn}>←</button>
         <span style={{ fontSize:17, fontWeight:800 }}>Request Ingredients</span>
@@ -835,12 +850,12 @@ export default function StaffPortal() {
             <div key={i} style={{ display:"grid", gridTemplateColumns:"40px 1fr 70px 60px 28px", gap:6, marginBottom:10, alignItems:"center" }}>
               <div style={{ fontSize:13, fontWeight:700, color:"#999", textAlign:"center" }}>{i+1}</div>
               <SearchableSelect options={ingredients} value={item.ingredient_id} onChange={v=>{ const ing=ingredients.find(x=>x.id===v); setReqItems(prev=>prev.map((x,idx)=>idx===i?{...x,ingredient_id:v,unit:biggestUnit(ing)}:x)) }} placeholder="Search..." />
-              <input type="number" inputMode="decimal" value={item.qty} onChange={e=>setReqItems(prev=>prev.map((x,idx)=>idx===i?{...x,qty:e.target.value}:x))} style={{ ...s.input, padding:"10px 8px", fontSize:14, textAlign:"center" }} placeholder="0" />
+              <input type="text" inputMode="decimal" value={item.qty} onChange={e=>setReqItems(prev=>prev.map((x,idx)=>idx===i?{...x,qty:e.target.value}:x))} style={{ ...s.input, padding:"10px 8px", fontSize:14, textAlign:"center" }} placeholder="0" />
               {unitOptions.length>0
                 ? <select value={item.unit} onChange={e=>setReqItems(prev=>prev.map((x,idx)=>idx===i?{...x,unit:e.target.value}:x))} style={{ ...s.input, padding:"10px 6px", fontSize:13, textAlign:"center" }}>
                     {unitOptions.map(u=><option key={u} value={u}>{u}</option>)}
                   </select>
-                : <input value={item.unit} onChange={e=>setReqItems(prev=>prev.map((x,idx)=>idx===i?{...x,unit:e.target.value}:x))} style={{ ...s.input, padding:"10px 6px", fontSize:13, textAlign:"center" }} placeholder="kg" />
+                : <input list="uom-options" value={item.unit} onChange={e=>setReqItems(prev=>prev.map((x,idx)=>idx===i?{...x,unit:e.target.value}:x))} style={{ ...s.input, padding:"10px 6px", fontSize:13, textAlign:"center" }} placeholder="kg" />
               }
               {reqItems.length>1 ? <button onClick={()=>setReqItems(prev=>prev.filter((_,idx)=>idx!==i))} style={{ background:"none", border:"none", color:"#DE350B", fontSize:18, cursor:"pointer", padding:0 }}>✕</button> : <div/>}
             </div>
