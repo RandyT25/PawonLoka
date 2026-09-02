@@ -2,7 +2,6 @@ import { useState, useEffect, useMemo } from 'react'
 import { supabase } from '../../lib/supabase'
 import { qr } from '../../lib/quickRead'
 import { fmt } from '../../shared/constants'
-import { dbWrite } from '../../shared/dbWrite'
 
 const DEFAULT_CRITICAL_ITEMS = [
   'ING-1780245811602', // Ayam Bumbu Kuning (sub) (Ayam Ungkep)
@@ -39,12 +38,12 @@ export default function DailyStockModal({ show, onClose, staff, shift }) {
     setSavedSuccess(false)
     try {
       const [
-        { data: settings },
-        { data: allIngredients },
-        { data: recipes },
-        { data: todayOrders },
-        { data: todayMovements },
-        { data: existingRecon }
+        settings,
+        allIngredients,
+        recipes,
+        todayOrders,
+        todayMovements,
+        existingRecon
       ] = await Promise.all([
         qr(supabase.from('app_settings').select('pos_behaviour').eq('id', 'main').single(), { ms: 5000 }),
         qr(supabase.from('ingredients').select('id, name, unit, stock, cost_per_unit').order('name'), { ms: 5000 }),
@@ -64,7 +63,7 @@ export default function DailyStockModal({ show, onClose, staff, shift }) {
       })
 
       // Calculate sold quantity and breakdown per ingredient from today's paid orders
-      const salesUsage = {} // ingId -> { total: number, breakdown: { [productName]: { orderQty, portionQty, totalUsed, unit } } }
+      const salesUsage = {} // ingId -> { total, breakdown }
       ;(todayOrders || []).forEach(order => {
         ;(order.items || []).forEach(item => {
           const itemSku = item.sku
@@ -93,7 +92,7 @@ export default function DailyStockModal({ show, onClose, staff, shift }) {
         })
       })
 
-      // Calculate production/additions and waste for today from movements
+      // Calculate additions and waste for today
       const additions = {}
       const waste = {}
       ;(todayMovements || []).forEach(mov => {
@@ -155,6 +154,22 @@ export default function DailyStockModal({ show, onClose, staff, shift }) {
 
   function handleCountChange(ingId, val) {
     setCounts(prev => ({ ...prev, [ingId]: val }))
+  }
+
+  function setAllToExpected() {
+    const next = {}
+    items.forEach(it => {
+      next[it.id] = String(it.expected_sisa)
+    })
+    setCounts(next)
+  }
+
+  function adjustCount(ingId, delta, defaultVal) {
+    const curVal = counts[ingId] !== undefined && counts[ingId] !== ''
+      ? parseFloat(String(counts[ingId]).replace(',', '.'))
+      : defaultVal
+    const next = Math.max(0, Math.round((curVal + delta) * 100) / 100)
+    setCounts(prev => ({ ...prev, [ingId]: String(next) }))
   }
 
   async function handleSubmit() {
@@ -237,7 +252,7 @@ export default function DailyStockModal({ show, onClose, staff, shift }) {
             <div>
               <div style={{ fontSize: 18, fontWeight: 900, color: '#0A1628' }}>Rekonsiliasi Stok Harian</div>
               <div style={{ fontSize: 12, color: '#6B7A8D' }}>
-                Hitung sisa fisik bahan kritis hari ini ({today}) · Kasir: {staff?.name || 'Kasir'}
+                Hitung sisa fisik bahan kritis hari ini ({today}) · Kasir: <b>{staff?.name || 'Kasir'}</b>
               </div>
             </div>
           </div>
@@ -248,8 +263,8 @@ export default function DailyStockModal({ show, onClose, staff, shift }) {
         <div style={styles.body}>
           {loading ? (
             <div style={{ padding: 40, textAlign: 'center', color: '#6B7A8D' }}>
-              <div style={{ fontSize: 24, marginBottom: 8 }}>⏳</div>
-              <div>Menghitung pemakaian resep & stok hari ini...</div>
+              <div style={{ fontSize: 28, marginBottom: 8 }}>⏳</div>
+              <div style={{ fontWeight: 600 }}>Memuat daftar bahan & penjualan hari ini...</div>
             </div>
           ) : savedSuccess ? (
             <div style={{ padding: 50, textAlign: 'center' }}>
@@ -259,10 +274,18 @@ export default function DailyStockModal({ show, onClose, staff, shift }) {
             </div>
           ) : (
             <>
-              {/* Informative Banner */}
-              <div style={styles.banner}>
-                💡 <b>Formula:</b> <code>Sisa Seharusnya = Stok Awal + Masuk - Terjual (POS) - Waste</code>.
-                Ketik sisa fisik di kolom <b>Sisa Fisik</b> untuk melihat selisih real-time.
+              {/* Quick Fill Action Bar */}
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#F8FAFC', padding: '10px 14px', borderRadius: 10, marginBottom: 14, border: '1px solid #E2E8F0', flexWrap: 'wrap', gap: 8 }}>
+                <div style={{ fontSize: 12, color: '#475569' }}>
+                  💡 <b>Tips:</b> Klik <b>"Sesuai Teori"</b> jika fisik cocok, atau klik <b>[+] / [-]</b> untuk menyesuaikan.
+                </div>
+                <button
+                  type="button"
+                  onClick={setAllToExpected}
+                  style={styles.quickFillAllBtn}
+                >
+                  ⚡ Isi Semua Sesuai Teori
+                </button>
               </div>
 
               {/* Items Table */}
@@ -275,7 +298,7 @@ export default function DailyStockModal({ show, onClose, staff, shift }) {
                       <th style={{ ...styles.th, textAlign: 'center' }}>+Masuk</th>
                       <th style={{ ...styles.th, textAlign: 'center' }}>-Terjual</th>
                       <th style={{ ...styles.th, textAlign: 'center', background: '#F1F5F9' }}>Sisa Teori</th>
-                      <th style={{ ...styles.th, textAlign: 'center', width: 110, background: '#EFF6FF' }}>Sisa Fisik (Input)</th>
+                      <th style={{ ...styles.th, textAlign: 'center', width: 190, background: '#EFF6FF' }}>Sisa Fisik (Input)</th>
                       <th style={{ ...styles.th, textAlign: 'center' }}>Selisih</th>
                     </tr>
                   </thead>
@@ -303,7 +326,7 @@ export default function DailyStockModal({ show, onClose, staff, shift }) {
                                   onClick={() => setExpandedItem(isExpanded ? null : item.id)}
                                   style={styles.breakdownBtn}
                                 >
-                                  {isExpanded ? '▲ Tutup Rincian' : '▼ Cek Menu Terjual'}
+                                  {isExpanded ? '▲ Tutup' : '▼ Menu Terjual'}
                                 </button>
                               )}
                             </div>
@@ -334,14 +357,38 @@ export default function DailyStockModal({ show, onClose, staff, shift }) {
                             {item.expected_sisa} {item.unit}
                           </td>
                           <td style={{ ...styles.td, textAlign: 'center', background: '#F0F9FF', padding: '6px 8px' }}>
-                            <input
-                              type="text"
-                              inputMode="decimal"
-                              value={counts[item.id] ?? ''}
-                              onChange={e => handleCountChange(item.id, e.target.value)}
-                              placeholder={String(item.expected_sisa)}
-                              style={styles.input}
-                            />
+                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4 }}>
+                              <button
+                                type="button"
+                                onClick={() => adjustCount(item.id, -1, item.expected_sisa)}
+                                style={styles.stepperBtn}
+                              >
+                                -
+                              </button>
+                              <input
+                                type="text"
+                                inputMode="decimal"
+                                value={counts[item.id] ?? ''}
+                                onChange={e => handleCountChange(item.id, e.target.value)}
+                                placeholder={String(item.expected_sisa)}
+                                style={styles.input}
+                              />
+                              <button
+                                type="button"
+                                onClick={() => adjustCount(item.id, 1, item.expected_sisa)}
+                                style={styles.stepperBtn}
+                              >
+                                +
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleCountChange(item.id, String(item.expected_sisa))}
+                                title="Isi sesuai sisa teori"
+                                style={styles.matchBtn}
+                              >
+                                =
+                              </button>
+                            </div>
                           </td>
                           <td style={{ ...styles.td, textAlign: 'center' }}>
                             {!hasInput ? (
@@ -411,7 +458,7 @@ const styles = {
     background: '#fff',
     borderRadius: 16,
     width: '100%',
-    maxWidth: 780,
+    maxWidth: 820,
     maxHeight: '90vh',
     display: 'flex',
     flexDirection: 'column',
@@ -439,15 +486,6 @@ const styles = {
     overflowY: 'auto',
     padding: '16px 20px'
   },
-  banner: {
-    background: '#FEF3C7',
-    border: '1px solid #FDE68A',
-    borderRadius: 8,
-    padding: '10px 14px',
-    fontSize: 12,
-    color: '#92400E',
-    marginBottom: 14
-  },
   table: {
     width: '100%',
     borderCollapse: 'collapse',
@@ -467,18 +505,56 @@ const styles = {
     verticalAlign: 'middle'
   },
   input: {
-    width: '100%',
-    maxWidth: 80,
-    padding: '6px 8px',
+    width: 64,
+    padding: '7px 4px',
     borderRadius: 8,
     border: '1.5px solid #0284C7',
-    fontSize: 15,
+    fontSize: 14.5,
     fontWeight: 800,
     textAlign: 'center',
     color: '#0369A1',
     background: '#fff',
     outline: 'none',
     boxSizing: 'border-box'
+  },
+  stepperBtn: {
+    width: 28,
+    height: 32,
+    background: '#E0F2FE',
+    border: '1px solid #BAE6FD',
+    borderRadius: 6,
+    color: '#0369A1',
+    fontSize: 15,
+    fontWeight: 800,
+    cursor: 'pointer',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 0
+  },
+  matchBtn: {
+    height: 32,
+    padding: '0 8px',
+    background: '#DCFCE7',
+    border: '1px solid #86EFAC',
+    borderRadius: 6,
+    color: '#15803D',
+    fontSize: 13,
+    fontWeight: 800,
+    cursor: 'pointer',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center'
+  },
+  quickFillAllBtn: {
+    padding: '6px 12px',
+    background: '#0284C7',
+    color: '#fff',
+    border: 'none',
+    borderRadius: 6,
+    fontSize: 11.5,
+    fontWeight: 700,
+    cursor: 'pointer'
   },
   badge: {
     fontSize: 11.5,
