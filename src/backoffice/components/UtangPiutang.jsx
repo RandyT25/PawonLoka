@@ -572,7 +572,7 @@ export default function UtangPiutang() {
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: 12, fontSize: 12.5, color: "#334155", lineHeight: 1.5 }}>
               <div>
                 <b>1. Modal Awal Disetor (Equity):</b>
-                <div>Uang tunai pribadi yang Anda & Mila keluarkan saat merintis PawonLoka (Total Rp 90.289.028). Uang ini <b>sudah 100% dibelanjakan</b> untuk pembangunan resto, peralatan & sewa tempat.</div>
+                <div>Uang tunai pribadi yang Claudy & Mila keluarkan saat merintis PawonLoka (Total Rp 90.289.028). Uang ini <b>sudah 100% dibelanjakan</b> untuk pembangunan resto, peralatan & sewa tempat.</div>
               </div>
               <div>
                 <b>2. Kenapa Nominal Ini Tetap Tercatat?:</b>
@@ -580,7 +580,7 @@ export default function UtangPiutang() {
               </div>
               <div>
                 <b>3. Fungsi Tombol "Catat Pengembalian Modal / Prive":</b>
-                <div>Hanya digunakan jika di masa depan resto membagikan laba bersih *(dividen/prive)* kembali ke kantong pribadi Anda atau Mila, sehingga terlacak kapan modal awal tersebut lunas kembali.</div>
+                <div>Hanya digunakan jika di masa depan resto membagikan laba bersih *(dividen/prive)* kembali ke kantong pribadi Claudy atau Mila, sehingga terlacak kapan modal awal tersebut lunas kembali.</div>
               </div>
             </div>
           </div>
