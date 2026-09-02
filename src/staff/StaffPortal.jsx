@@ -26,7 +26,7 @@ function biggestUnit(ing) {
 }
 const REASONS = ["Expired","Damaged","Overproduction","Spillage","Other"]
 
-const parseNum = (v) => parseNum(String(v).replace(",",".")) || 0
+const parseNum = (v) => parseFloat(String(v).replace(",", ".")) || 0
 
 const STATIONS = {
   Kitchen:    { color:"#00875A" },
