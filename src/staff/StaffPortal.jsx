@@ -345,6 +345,27 @@ export default function StaffPortal() {
     })
   }
 
+  
+  async function submitTrial() {
+    if (!trialForm.trialName.trim()) { alert("Nama trial harus diisi"); return }
+    const validItems = trialForm.items.filter(i => i.ingredient_id && i.qty)
+    if (validItems.length === 0) { alert("Pilih minimal 1 bahan dan qty"); return }
+    
+    await submit("trial", {
+      trialName: trialForm.trialName,
+      notes: trialForm.notes,
+      items: validItems.map(it => {
+        const ing = ingredients.find(x => x.id === it.ingredient_id)
+        return {
+          ingredient_id: it.ingredient_id,
+          ingredient_name: ing?.name,
+          qty: parseFloat(it.qty),
+          unit: it.unit
+        }
+      })
+    })
+  }
+
   async function submitRequisition() {
     const valid = reqItems.filter(i=>i.ingredient_id&&parseFloat(i.qty)>0)
     if (!valid.length) { alert("Add at least one item"); return }
@@ -362,6 +383,7 @@ export default function StaffPortal() {
     setProdType(""); setProdSubId(""); setProdProductSku(""); setProdBatchQty(""); setProdYield(""); setProdYieldUnit(""); setProdUsed([]); setProdNotes("")
     setProdDate(new Date().toISOString().slice(0,10))
     setReqDate(new Date().toISOString().slice(0,10)); setReqNotes(""); setReqItems([{ ingredient_id:"", qty:"", unit:"" }])
+    setTrialForm({ trialName:"", notes:"", items:[{ingredient_id:"", qty:"", unit:""}] })
     if ((stationStaff[station]||[]).length === 1) setStaffName(stationStaff[station][0])
   }
 

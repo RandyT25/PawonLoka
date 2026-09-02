@@ -824,7 +824,7 @@ export default function StaffSubmissions() {
 
       {/* Type filter — secondary refinement, visually lighter than the status tabs above */}
       <div style={{ display:"flex", gap:4, marginBottom:16, flexWrap:"wrap" }}>
-        {[["all","All Types"],["opname","Stock Count"],["waste","Waste"],["consumption","Staff Meal"],["production","Production"],["requisition","Request"],["receiving","Receiving"]].map(([f,l])=>(
+        {[["all","All Types"],["opname","Stock Count"],["waste","Waste"],["consumption","Staff Meal"],["production","Production"],["requisition","Request"],["receiving","Receiving"],["trial","Trial / R&D"]].map(([f,l])=>(
           <button key={f} onClick={()=>setTypeFilter(f)}
             className="bo-btn bo-btn-sm bo-btn-ghost"
             style={{ fontSize:11, opacity: typeFilter===f?1:0.6, fontWeight: typeFilter===f?700:500 }}>{TYPE_ICONS[f]||""} {l}</button>
