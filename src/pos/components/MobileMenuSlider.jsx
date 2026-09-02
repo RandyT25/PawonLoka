@@ -1,7 +1,8 @@
-export default function MobileMenuSlider({ show, onClose, staff, onClockIn, onCashLog, onReprint, onPrintCheck, onSettings, onLogout, onRefresh }) {
+export default function MobileMenuSlider({ show, onClose, staff, onClockIn, onDailyStock, onCashLog, onReprint, onPrintCheck, onSettings, onLogout, onRefresh }) {
   if (!show) return null
 
   const items = [
+    onDailyStock && ['📦 Stok Harian', onDailyStock],
     ['🕐 Clock In/Out', onClockIn],
     ['💵 Cash In/Out', onCashLog],
     ['🖨 Cetak Ulang Struk', onReprint],

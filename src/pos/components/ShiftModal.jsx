@@ -6,7 +6,7 @@ import { dbWrite } from '../../shared/dbWrite'
 import { explodeOrderPayments } from '../../shared/orderPricing'
 import { printShiftReport, printProductSoldReport } from '../hooks/usePrinter'
 
-export default function ShiftModal({ staff, shift, onOpen, onClose, onDismiss, onLogout, printer }) {
+export default function ShiftModal({ staff, shift, onOpen, onClose, onDismiss, onLogout, onOpenDailyStock, printer }) {
   const [float, setFloat]         = useState('')
   const [saving, setSaving]       = useState(false)
   const [report, setReport]       = useState(null)
@@ -250,6 +250,22 @@ export default function ShiftModal({ staff, shift, onOpen, onClose, onDismiss, o
             {/* Close section */}
             <div style={{ padding:'14px 20px' }}>
               <div style={S.sectionLabel}>Tutup Shift</div>
+
+              {onOpenDailyStock && (
+                <div style={{ background:'#EFF6FF', border:'1px solid #BFDBFE', borderRadius:12, padding:'12px 14px', marginBottom:14, display:'flex', alignItems:'center', justifyContent:'space-between', gap:10 }}>
+                  <div>
+                    <div style={{ fontSize:13, fontWeight:800, color:'#1E40AF' }}>📦 Hitung Stok Harian</div>
+                    <div style={{ fontSize:11, color:'#3B82F6' }}>Cocokkan sisa sate, ayam, telur & daging hari ini</div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={onOpenDailyStock}
+                    style={{ padding:'7px 14px', background:'#2563EB', color:'#fff', border:'none', borderRadius:8, fontSize:12, fontWeight:700, cursor:'pointer' }}
+                  >
+                    Buka Hitungan
+                  </button>
+                </div>
+              )}
 
               {/* ── Open bill blocker ───────────────────── */}
               {report.openBills?.length > 0 && (

@@ -33,6 +33,7 @@ const FloorPlan       = lazy(() => import('./components/FloorPlan'))
 const OrdersModal     = lazy(() => import('./components/OrdersModal'))
 const PrinterSettings = lazy(() => import('./components/PrinterSettings'))
 const ClockInOutModal = lazy(() => import('./components/ClockInOutModal'))
+const DailyStockModal = lazy(() => import('./components/DailyStockModal'))
 
 export default function POS() {
   const [offlineReady,  setOfflineReady]  = useState(false)
@@ -79,6 +80,7 @@ export default function POS() {
   const [showShift, setShowShift]         = useState(false)
   const [shiftAsked, setShiftAsked]       = useState(false)
   const [showClock, setShowClock]         = useState(false)
+  const [showDailyStock, setShowDailyStock] = useState(false)
   const [showSettings, setShowSettings]   = useState(false)
   const [showMobileMenu, setShowMobileMenu] = useState(false)
   const [voidAuth, setVoidAuth] = useState(null) // {orderId, reason, pin}
@@ -501,6 +503,7 @@ export default function POS() {
         staff={staff}
         shift={shift}
         printer={printer}
+        onOpenDailyStock={() => { setShowShift(false); setShowDailyStock(true) }}
         onOpen={s => { setShift(s); setShowShift(false); setTimeout(()=>{ if(window.confirm('Shift dibuka! Jangan lupa Clock In ya ' + staff.name + '?')) { setShowClock(true) } },500) }}
         onClose={() => { setShift(null); setShowShift(false); setTimeout(()=>{ if(window.confirm('Shift ditutup! Jangan lupa Clock Out ya ' + staff.name + '?')) { setShowClock(true) } },500) }}
         onDismiss={() => setShowShift(false)}
@@ -1469,6 +1472,7 @@ export default function POS() {
         show={showMobileMenu}
         onClose={() => setShowMobileMenu(false)}
         staff={staff}
+        onDailyStock={() => setShowDailyStock(true)}
         onClockIn={() => setShowClock(true)}
         onCashLog={() => { if (staff?.permissions && !staff.permissions.cash) { alert('No cash in/out permission'); return } setShowCashLog(true) }}
         onReprint={() => { setShowMobileMenu(false); setShowReprint(true) }}
@@ -1476,6 +1480,16 @@ export default function POS() {
         onSettings={() => setShowSettings(true)}
         onLogout={() => { if (shift) { setShowShift(true); return } setStaff(null); setShift(null); clearCart(); setCustomer(null); setTableNo(''); setTableArea(''); setOpenBillId(null) }}
       />
+      {showDailyStock && (
+        <Suspense fallback={null}>
+          <DailyStockModal
+            show={showDailyStock}
+            onClose={() => setShowDailyStock(false)}
+            staff={staff}
+            shift={shift}
+          />
+        </Suspense>
+      )}
       {/* Void Auth Modal */}
       {voidAuth !== null && (
         <div style={{ position:'fixed',inset:0,background:'rgba(0,0,0,0.6)',zIndex:3000,display:'flex',alignItems:'center',justifyContent:'center' }}

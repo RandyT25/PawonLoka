@@ -9,9 +9,11 @@ import InvWaste       from "./inventory/InvWaste"
 import InvStaffConsumption from "./inventory/InvStaffConsumption"
 import InvMovements   from "./inventory/InvMovements"
 import InvRebuildPreview from "./inventory/InvRebuildPreview"
+import InvDailyRecon from "./inventory/InvDailyRecon"
 
 const TABS = [
   { id:"inv-overview",     label:"Overview",         icon:"📦" },
+  { id:"inv-daily-recon",  label:"Daily Stock Audit",icon:"📊" },
   { id:"inv-ingredients",  label:"Ingredients",      icon:"🧂" },
   { id:"inv-supplies",     label:"Supplies",         icon:"🧴" },
   { id:"inv-po",           label:"Purchase Orders",  icon:"🛒" },
@@ -26,6 +28,7 @@ const TABS = [
 
 const SCREENS = {
   "inv-overview":    InvOverview,
+  "inv-daily-recon": InvDailyRecon,
   "inv-ingredients": InvIngredients,
   "inv-supplies":    (props) => <InvIngredients {...props} mode="supplies" />,
   "inv-po":          InvPO,
