@@ -105,6 +105,15 @@ export default function DailyStockModal({ show, onClose, staff, shift }) {
         }
       })
 
+      // Find previous day's daily_recon to establish true opening stock for today
+      const prevDayRecon = (existingRecon || []).find(r => r.data?.date && r.data.date < today)
+      const prevCountsMap = {}
+      if (prevDayRecon?.data?.items) {
+        prevDayRecon.data.items.forEach(it => {
+          if (it.actual_qty !== undefined) prevCountsMap[it.ingredient_id] = it.actual_qty
+        })
+      }
+
       // Check if there is already a count for today in existingRecon
       const todayExisting = (existingRecon || []).find(r => r.data?.date === today)
       const initialCounts = {}
@@ -126,7 +135,9 @@ export default function DailyStockModal({ show, onClose, staff, shift }) {
         const wasted = waste[ingId] || 0
         
         const currentLiveStock = parseFloat(ing.stock) || 0
-        const openingStock = Math.max(0, currentLiveStock + sold + wasted - added)
+        const openingStock = prevCountsMap[ingId] !== undefined
+          ? prevCountsMap[ingId]
+          : Math.max(0, currentLiveStock + sold + wasted - added)
         const expectedSisa = Math.max(0, openingStock + added - sold - wasted)
 
         return {
