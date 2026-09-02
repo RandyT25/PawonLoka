@@ -364,7 +364,7 @@ export default function InvDailyRecon() {
       {viewDetail && (
         <div className="bo-modal-overlay" onClick={() => setViewDetail(null)}>
           <div className="bo-modal" style={{ maxWidth: 840 }} onClick={e => e.stopPropagation()}>
-            <div className="bo-modal-hd">
+            <div className="bo-modal-header">
               <div>
                 <div style={{ fontSize: 16, fontWeight: 800 }}>
                   📋 Rincian Stok Harian ({viewDetail.data?.date || viewDetail.submitted_at?.slice(0, 10)})
@@ -465,7 +465,7 @@ export default function InvDailyRecon() {
       {showManageModal && (
         <div className="bo-modal-overlay" onClick={() => setShowManageModal(false)}>
           <div className="bo-modal" style={{ maxWidth: 640 }} onClick={e => e.stopPropagation()}>
-            <div className="bo-modal-hd">
+            <div className="bo-modal-header">
               <div>
                 <div style={{ fontSize: 16, fontWeight: 800 }}>⚙️ Kelola Bahan Rekonsiliasi Harian</div>
                 <div style={{ fontSize: 12, color: "var(--ink4)" }}>
