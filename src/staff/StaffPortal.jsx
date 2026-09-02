@@ -46,7 +46,7 @@ const MENUS = {
   Kitchen: ["opname","waste","production","requisition","trial"],
   Snack:   ["opname","waste","production","requisition","trial"],
   Bar:     ["opname","waste","production","requisition","trial"],
-  Kasir:   ["requisition"],
+  Kasir:   ["opname","waste","production","requisition","trial"],
 }
 
 const MENU_ITEMS = [
@@ -55,7 +55,6 @@ const MENU_ITEMS = [
   { screen:"consumption", icon:"🍽️", label:"Staff Meal / Personal Use", sub:"Log food or drink you took for yourself", bg:"#F59E0B" },
   { screen:"production",  icon:"🏭", label:"Production Batch",    sub:"Record what was produced today",    bg:"#00875A" },
   { screen:"requisition", icon:"🛒", label:"Request Ingredients", sub:"Request items needed for today",    bg:"#374151" },
-  { screen:"trial",       icon:"🧪", label:"Trial Menu / R&D",  sub:"Record testing new recipes or photoshoots", bg:"#6366F1" },
   { screen:"trial",       icon:"🧪", label:"Trial Menu / R&D",  sub:"Record testing new recipes or photoshoots", bg:"#6366F1" },
 ]
 
