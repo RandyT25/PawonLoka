@@ -1304,6 +1304,7 @@ export default function POS() {
           <button onClick={() => { if (staff?.permissions && !staff.permissions.cash) { alert('No cash in/out permission'); return } setShowCashLog(true) }} style={S.headerBtn} className="pos-hide-mobile">Cash</button>
           <button onClick={() => setShowReprint(true)} style={{ ...S.headerBtn, color:'#86EFAC' }} className="pos-hide-mobile">🖨 Reprint</button>
           <button onClick={() => setShowVoid(true)} style={{ ...S.headerBtn, color:'#FCA5A5' }} className="pos-hide-mobile">Void</button>
+          <button onClick={() => setShowDailyStock(true)} style={{ ...S.headerBtn, background:'rgba(255,255,255,0.18)', color:'#FDE047', fontWeight:700 }} className="pos-hide-mobile">📦 Audit Stok</button>
           <button onClick={() => setShowShift(true)} style={S.headerBtn} className="pos-hide-mobile">Shift</button>
           <button onClick={() => setShowMobileMenu(true)} style={{ ...S.headerBtn, fontSize:20, padding:'4px 10px' }}>☰</button>
         </div>
@@ -1487,6 +1488,7 @@ export default function POS() {
             onClose={() => setShowDailyStock(false)}
             staff={staff}
             shift={shift}
+            printer={printer}
           />
         </Suspense>
       )}
