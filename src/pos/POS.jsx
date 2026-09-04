@@ -336,85 +336,12 @@ export default function POS() {
     await applyRecipeStockMovement(items, { sign: -1, type: 'Sale', ref: orderId, orderId, actor: staff?.name })
   }
 
-  // Called before opening ChargeModal. Fetches live ingredient stock for every recipe
-  // item in the cart and blocks checkout if any required ingredient is at zero or below.
-  // Items with no recipe, or in the "Frozen Food" category (deducted at production), are
-  // always allowed through — only items that *have* a recipe are checked.
+  // Called before opening ChargeModal. Used to block checkout when a cart item's recipe
+  // needed more of an ingredient than was on hand — disabled per owner request: ingredient
+  // stock records aren't kept accurate enough for the block to be trustworthy, and it was
+  // stopping real sales. Stock still deducts normally on sale via deductStock().
   async function checkStockBeforeCharge() {
-    try {
-      const skus = [...new Set(cart.map(i => i.sku).filter(Boolean))]
-      if (!skus.length) { setShowCharge(true); return }
-
-      // Frozen Food items are skipped (stock handled at production)
-      const frozenSkus = new Set(products.filter(p => p.cat === 'Frozen Food').map(p => p.sku))
-      const eligibleSkus = skus.filter(s => !frozenSkus.has(s))
-
-      const [{ data: recipes }, { data: modifierGroups }] = await Promise.all([
-        supabase.from('recipes').select('product_id,ingredient_id,qty').in('product_id', eligibleSkus),
-        supabase.from('modifier_groups').select('id,options'),
-      ])
-
-      const ingIds = [...new Set((recipes || []).map(r => r.ingredient_id))]
-      // Also add modifier ingredient IDs for items in the cart
-      const modOptMap = {}
-      for (const mg of modifierGroups || []) {
-        const opts = typeof mg.options === 'string' ? JSON.parse(mg.options || '[]') : (mg.options || [])
-        modOptMap[mg.id] = {}
-        for (const opt of opts) {
-          if (opt.ingredient_id) { modOptMap[mg.id][opt.name] = opt.ingredient_id; if (!ingIds.includes(opt.ingredient_id)) ingIds.push(opt.ingredient_id) }
-        }
-      }
-
-      if (!ingIds.length) { setShowCharge(true); return }
-
-      const { data: ingredients } = await supabase.from('ingredients').select('id,name,stock,unit').in('id', ingIds)
-      const ingMap = Object.fromEntries((ingredients || []).map(i => [i.id, i]))
-
-      // Group recipes by product_id for lookup
-      const recipeMap = {}
-      for (const r of recipes || []) {
-        if (!recipeMap[r.product_id]) recipeMap[r.product_id] = []
-        recipeMap[r.product_id].push(r)
-      }
-
-      // Accumulate required quantities across the whole cart (multi-qty items, shared ingredients)
-      const required = {}
-      for (const item of cart) {
-        if (frozenSkus.has(item.sku)) continue
-        for (const r of recipeMap[item.sku] || []) {
-          required[r.ingredient_id] = (required[r.ingredient_id] || 0) + (r.qty || 1) * (item.qty || 1)
-        }
-        for (const [groupId, chosenOption] of Object.entries(item.modifiers || {})) {
-          const ingId = modOptMap[groupId]?.[chosenOption]
-          if (ingId) required[ingId] = (required[ingId] || 0) + (item.qty || 1)
-        }
-      }
-
-      // Find items that have a recipe but an ingredient is insufficient
-      const blocked = []
-      for (const item of cart) {
-        if (frozenSkus.has(item.sku)) continue
-        if (!recipeMap[item.sku]?.length) continue // no recipe → allow
-        for (const r of recipeMap[item.sku]) {
-          const ing = ingMap[r.ingredient_id]
-          if (!ing) continue
-          if ((ing.stock || 0) < (required[r.ingredient_id] || 0)) {
-            if (!blocked.find(b => b.itemName === item.name && b.ingName === ing.name)) {
-              blocked.push({ itemName: item.name, ingName: ing.name, stock: ing.stock || 0, need: required[r.ingredient_id], unit: ing.unit })
-            }
-          }
-        }
-      }
-
-      if (blocked.length === 0) { setShowCharge(true); return }
-
-      const lines = blocked.map(b => `• ${b.itemName} — ${b.ingName}: stok ${b.stock} ${b.unit}, butuh ${b.need} ${b.unit}`).join('\n')
-      alert(`⚠️ Stok tidak cukup untuk memproses pesanan ini:\n\n${lines}\n\nHarap update stok atau hapus item dari keranjang.`)
-    } catch (e) {
-      console.error('Stock pre-check error:', e)
-      // Fail open — don't block checkout if the check itself errors (e.g. offline)
-      setShowCharge(true)
-    }
+    setShowCharge(true)
   }
 
   async function loadData() {
