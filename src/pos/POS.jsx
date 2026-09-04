@@ -35,6 +35,10 @@ const PrinterSettings = lazy(() => import('./components/PrinterSettings'))
 const ClockInOutModal = lazy(() => import('./components/ClockInOutModal'))
 const DailyStockModal = lazy(() => import('./components/DailyStockModal'))
 
+// orders.channel has a DB check constraint restricting it to this exact set —
+// orderType is the free-text UI label, this maps it to the allowed value.
+const ORDER_TYPE_TO_CHANNEL = { 'Dine-in': 'dine_in', 'Takeaway': 'takeaway', 'Delivery': 'delivery_other' }
+
 export default function POS() {
   const [offlineReady,  setOfflineReady]  = useState(false)
   const [firstSync,     setFirstSync]     = useState(false)
@@ -700,7 +704,7 @@ export default function POS() {
         customer: customer ? customer.name : null, customer_id: customer ? customer.id : null,
         status: 'Open', date: now.toISOString().slice(0,10),
         time: now.toLocaleTimeString('id-ID', { hour:'2-digit', minute:'2-digit' }), cogs:0,
-        channel: 'pos',
+        channel: ORDER_TYPE_TO_CHANNEL[orderType] || 'dine_in',
       }
       const ok = await dbWrite('orders', 'insert', order)
       if (!ok) { alert('Gagal simpan order'); return }
@@ -1155,7 +1159,7 @@ export default function POS() {
       payments: [{ method: payMethod, amount: finalTotal }],
       change: payMethod === 'Cash' ? Math.max(0, (parseInt(cashGiven)||0) - finalTotal) : 0,
       cogs: orderCogs,
-      channel: 'pos',
+      channel: ORDER_TYPE_TO_CHANNEL[orderType] || 'dine_in',
     }
     const saved = await dbWrite('orders', 'insert', newOrder)
     if (!saved) { alert('⚠️ Gagal menyimpan order — cek koneksi dan coba lagi.'); return null }
