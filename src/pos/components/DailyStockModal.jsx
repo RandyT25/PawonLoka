@@ -224,11 +224,9 @@ export default function DailyStockModal({ show, onClose, staff, shift }) {
       const payload = {
         id: submissionId,
         type: 'daily_recon',
-        status: 'approved',
+        status: 'submitted',
         submitted_by: staff?.name || 'Kasir',
         submitted_at: new Date().toISOString(),
-        reviewed_at: new Date().toISOString(),
-        reviewed_by: staff?.name || 'Kasir (POS Live)',
         data: {
           date: today,
           shift_id: shift?.id || null,
@@ -241,27 +239,6 @@ export default function DailyStockModal({ show, onClose, staff, shift }) {
 
       const { error } = await supabase.from('staff_submissions').insert(payload)
       if (error) throw error
-
-      // Update live stock in ingredients and log movements
-      for (const item of recordedItems) {
-        if (item.actual_qty !== undefined) {
-          await supabase.from('ingredients').update({ stock: item.actual_qty }).eq('id', item.ingredient_id)
-          if (item.diff_qty !== 0) {
-            await supabase.from('stock_movements').insert({
-              id: 'MOV-' + Date.now() + '-' + Math.random().toString(36).slice(2, 6),
-              type: 'Adjustment',
-              ingredient_id: item.ingredient_id,
-              ingredient_name: item.name,
-              qty: item.diff_qty,
-              unit: item.unit,
-              ref: submissionId,
-              note: 'Daily Stock Audit by ' + (staff?.name || 'Kasir') + (item.diff_qty < 0 ? ` (Kurang ${Math.abs(item.diff_qty)})` : ` (Lebih ${item.diff_qty})`),
-              date: today,
-              time: new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' })
-            })
-          }
-        }
-      }
 
       setSavedSuccess(true)
       setTimeout(() => {
