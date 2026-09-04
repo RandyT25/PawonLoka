@@ -262,6 +262,7 @@ export default function CustomerApp({ tableId }) {
           date: now.toISOString().slice(0, 10),
           time: now.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }),
           cogs: 0,
+          channel: 'self_order',
         })
         if (e) throw e
         await supabase.from('tables').update({ status: 'Occupied', open_bill_id: orderId }).eq('name', tableId)

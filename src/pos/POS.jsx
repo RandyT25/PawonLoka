@@ -700,6 +700,7 @@ export default function POS() {
         customer: customer ? customer.name : null, customer_id: customer ? customer.id : null,
         status: 'Open', date: now.toISOString().slice(0,10),
         time: now.toLocaleTimeString('id-ID', { hour:'2-digit', minute:'2-digit' }), cogs:0,
+        channel: 'pos',
       }
       const ok = await dbWrite('orders', 'insert', order)
       if (!ok) { alert('Gagal simpan order'); return }
@@ -1154,6 +1155,7 @@ export default function POS() {
       payments: [{ method: payMethod, amount: finalTotal }],
       change: payMethod === 'Cash' ? Math.max(0, (parseInt(cashGiven)||0) - finalTotal) : 0,
       cogs: orderCogs,
+      channel: 'pos',
     }
     const saved = await dbWrite('orders', 'insert', newOrder)
     if (!saved) { alert('⚠️ Gagal menyimpan order — cek koneksi dan coba lagi.'); return null }
