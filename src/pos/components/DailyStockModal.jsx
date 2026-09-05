@@ -203,22 +203,16 @@ export default function DailyStockModal({ show, onClose, staff, shift }) {
     let stockUpdates = [];
     const recordedItems = items.map(item => {
       const finalAdded = manualAdded[item.id] !== undefined ? (parseFloat(manualAdded[item.id]) || 0) : item.added_qty;
-      const expected_sisa = Math.max(0, item.opening_stock + finalAdded - item.sold_qty - item.waste_qty);
+      
+      // expected_sisa MUST use auto_added_qty (True System Math), NOT finalAdded (Nita's claim)!
+      // This ensures that if Nita fakes a +Masuk to hide a shortage, the Teori still catches it!
+      const expected_sisa = Math.max(0, item.opening_stock + item.auto_added_qty - item.sold_qty - item.waste_qty);
+
+      
+      // REMOVED AUTO-INJECTION: We no longer magically create stock movements based on Nita's input.
+      // Her input is just a CLAIM that will be cross-checked against true system production.
       const extraMasuk = finalAdded - item.auto_added_qty;
-      if (extraMasuk !== 0) {
-        movementsToInsert.push({
-          id: "MOV-" + Date.now() + "-" + Math.random().toString(36).slice(2,6),
-          type: extraMasuk > 0 ? "PO Receive" : "Adjustment",
-          ingredient_id: item.id,
-          ingredient_name: item.name,
-          qty: extraMasuk,
-          unit: item.unit,
-          note: "Manual Restock input from Daily Audit",
-          date: today,
-          time: new Date().toLocaleTimeString("id-ID",{hour:"2-digit",minute:"2-digit"})
-        });
-        stockUpdates.push({ id: item.id, qty: extraMasuk });
-      }
+
         const rawActual = counts[item.id]
         const actualQty = rawActual !== undefined && rawActual !== ''
           ? parseFloat(String(rawActual).replace(',', '.'))

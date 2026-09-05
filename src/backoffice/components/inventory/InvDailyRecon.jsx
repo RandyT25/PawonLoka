@@ -414,6 +414,11 @@ export default function InvDailyRecon() {
                         <td style={{ textAlign: "center" }}>{it.opening_stock ?? "—"}</td>
                         <td style={{ textAlign: "center", color: it.added_qty > 0 ? "#00875A" : "var(--ink5)" }}>
                           {it.added_qty > 0 ? `+${it.added_qty}` : "0"}
+                          {it.claimed_added_qty !== undefined && it.claimed_added_qty !== it.added_qty && (
+                            <div style={{ color: "#DE350B", fontSize: 10, fontWeight: 700, marginTop: 2, background: "#FEE2E2", padding: "2px 4px", borderRadius: 4 }}>
+                              Klaim Kasir: +{it.claimed_added_qty}
+                            </div>
+                          )}
                         </td>
                         <td style={{ textAlign: "center", color: it.sold_qty > 0 ? "#DE350B" : "var(--ink5)", fontWeight: 600 }}>
                           {it.sold_qty > 0 ? `-${it.sold_qty}` : "0"}
