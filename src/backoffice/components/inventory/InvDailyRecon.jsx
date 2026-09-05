@@ -363,7 +363,7 @@ export default function InvDailyRecon() {
       {/* DETAIL MODAL */}
       {viewDetail && (
         <div className="bo-modal-overlay" onClick={() => setViewDetail(null)}>
-          <div className="bo-modal" style={{ maxWidth: 840 }} onClick={e => e.stopPropagation()}>
+          <div className="bo-modal" style={{ maxWidth: 1100 }} onClick={e => e.stopPropagation()}>
             <div className="bo-modal-header">
               <div>
                 <div style={{ fontSize: 16, fontWeight: 800 }}>
@@ -376,7 +376,7 @@ export default function InvDailyRecon() {
               <button className="bo-modal-close" onClick={() => setViewDetail(null)}>✕</button>
             </div>
 
-            <div className="bo-modal-body" style={{ maxHeight: "75vh", overflowY: "auto" }}>
+            <div className="bo-modal-body" style={{ maxHeight: "75vh", overflowY: "auto", paddingBottom: "40px" }}>
               {viewDetail.data?.notes && (
                 <div style={{ background: "#F8FAFC", padding: "16px", borderRadius: 8, marginBottom: 24, border: "1px solid #E2E8F0" }}>
                   <div style={{ color: "#334155", fontWeight: 700, marginBottom: 8, display: 'flex', alignItems: 'center', gap: 6 }}>
@@ -392,14 +392,15 @@ export default function InvDailyRecon() {
                 <thead>
                   <tr>
                     <th>Bahan</th>
-                    <th style={{ textAlign: "center" }}>Awal</th>
-                    <th style={{ textAlign: "center" }}>+Masuk</th>
-                    <th style={{ textAlign: "center" }}>-Terjual</th>
-                    <th style={{ textAlign: "center" }}>-Waste/Adj</th>
-                    <th style={{ textAlign: "center", background: "#F1F5F9" }}>Sisa Teori</th>
-                    <th style={{ textAlign: "center", background: "#EFF6FF" }}>Sisa Fisik</th>
-                    <th style={{ textAlign: "center" }}>Selisih</th>
-                    <th style={{ textAlign: "right" }}>Nilai Selisih</th>
+                    <th style={{ textAlign: "center", whiteSpace: "nowrap" }}>Awal</th>
+                    <th style={{ textAlign: "center", whiteSpace: "nowrap" }}>+Masuk</th>
+                    <th style={{ textAlign: "center", whiteSpace: "nowrap" }}>-Terjual</th>
+                    <th style={{ textAlign: "center", whiteSpace: "nowrap" }}>-Produksi</th>
+                    <th style={{ textAlign: "center", whiteSpace: "nowrap" }}>-Waste/Adj</th>
+                    <th style={{ textAlign: "center", background: "#F1F5F9", whiteSpace: "nowrap" }}>Sisa Teori</th>
+                    <th style={{ textAlign: "center", background: "#EFF6FF", whiteSpace: "nowrap" }}>Sisa Fisik</th>
+                    <th style={{ textAlign: "center", whiteSpace: "nowrap" }}>Selisih</th>
+                    <th style={{ textAlign: "right", whiteSpace: "nowrap" }}>Nilai Selisih</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -422,6 +423,9 @@ export default function InvDailyRecon() {
                         </td>
                         <td style={{ textAlign: "center", color: it.sold_qty > 0 ? "#DE350B" : "var(--ink5)", fontWeight: 600 }}>
                           {it.sold_qty > 0 ? `-${it.sold_qty}` : "0"}
+                        </td>
+                        <td style={{ textAlign: "center", color: (it.production_qty || 0) > 0 ? "#D97706" : "var(--ink5)", fontWeight: 600 }}>
+                          {(it.production_qty || 0) > 0 ? `-${it.production_qty}` : "0"}
                         </td>
                         <td style={{ textAlign: "center", color: it.waste_qty > 0 ? "#9A3412" : "var(--ink5)", fontWeight: 600 }}>
                           {it.waste_qty > 0 ? `-${it.waste_qty}` : "0"}

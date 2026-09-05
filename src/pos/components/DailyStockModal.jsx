@@ -100,6 +100,7 @@ export default function DailyStockModal({ show, onClose, staff, shift }) {
       // Calculate additions and waste for today
       const additions = {}
       const waste = {}
+      const production_deductions = {}
       ;(todayMovements || []).forEach(mov => {
         const ingId = mov.ingredient_id
         const qty = parseFloat(mov.qty) || 0
@@ -107,6 +108,8 @@ export default function DailyStockModal({ show, onClose, staff, shift }) {
         
         if (qty > 0) {
           additions[ingId] = (additions[ingId] || 0) + Math.abs(qty)
+        } else if (qty < 0 && mov.type === 'Production') {
+          production_deductions[ingId] = (production_deductions[ingId] || 0) + Math.abs(qty)
         } else if (qty < 0) {
           waste[ingId] = (waste[ingId] || 0) + Math.abs(qty)
         }
@@ -140,12 +143,13 @@ export default function DailyStockModal({ show, onClose, staff, shift }) {
         const breakdown = salesUsage[ingId]?.breakdown || {}
         const added = additions[ingId] || 0
         const wasted = waste[ingId] || 0
+        const prodDed = production_deductions[ingId] || 0
         
         const currentLiveStock = parseFloat(ing.stock) || 0
         const openingStock = prevCountsMap[ingId] !== undefined
           ? prevCountsMap[ingId]
-          : Math.max(0, currentLiveStock + sold + wasted - added)
-        const expectedSisa = Math.max(0, openingStock + added - sold - wasted)
+          : Math.max(0, currentLiveStock + sold + wasted + prodDed - added)
+        const expectedSisa = Math.max(0, openingStock + added - sold - wasted - prodDed)
 
         return {
           id: ing.id,
@@ -157,6 +161,7 @@ export default function DailyStockModal({ show, onClose, staff, shift }) {
         added_qty: Math.round(added * 100) / 100,
           sold_qty: Math.round(sold * 100) / 100,
           waste_qty: Math.round(wasted * 100) / 100,
+          production_qty: Math.round(prodDed * 100) / 100,
           expected_sisa: Math.round(expectedSisa * 100) / 100,
           sales_breakdown: breakdown
         }
@@ -206,7 +211,7 @@ export default function DailyStockModal({ show, onClose, staff, shift }) {
       
       // expected_sisa MUST use auto_added_qty (True System Math), NOT finalAdded (Nita's claim)!
       // This ensures that if Nita fakes a +Masuk to hide a shortage, the Teori still catches it!
-      const expected_sisa = Math.max(0, item.opening_stock + item.auto_added_qty - item.sold_qty - item.waste_qty);
+      const expected_sisa = Math.max(0, item.opening_stock + item.auto_added_qty - item.sold_qty - item.waste_qty - (item.production_qty||0));
 
       
       // REMOVED AUTO-INJECTION: We no longer magically create stock movements based on Nita's input.
@@ -231,6 +236,7 @@ export default function DailyStockModal({ show, onClose, staff, shift }) {
           added_qty: finalAdded,
           sold_qty: item.sold_qty,
           waste_qty: item.waste_qty,
+          production_qty: item.production_qty,
           expected_qty: expected_sisa,
           actual_qty: actualQty,
           diff_qty: diff,
