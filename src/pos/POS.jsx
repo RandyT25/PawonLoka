@@ -35,10 +35,6 @@ const PrinterSettings = lazy(() => import('./components/PrinterSettings'))
 const ClockInOutModal = lazy(() => import('./components/ClockInOutModal'))
 const DailyStockModal = lazy(() => import('./components/DailyStockModal'))
 
-// orders.channel has a DB check constraint restricting it to this exact set —
-// orderType is the free-text UI label, this maps it to the allowed value.
-const ORDER_TYPE_TO_CHANNEL = { 'Dine-in': 'dine_in', 'Takeaway': 'takeaway', 'Delivery': 'delivery_other' }
-
 export default function POS() {
   const [offlineReady,  setOfflineReady]  = useState(false)
   const [firstSync,     setFirstSync]     = useState(false)
@@ -336,14 +332,6 @@ export default function POS() {
     await applyRecipeStockMovement(items, { sign: -1, type: 'Sale', ref: orderId, orderId, actor: staff?.name })
   }
 
-  // Called before opening ChargeModal. Used to block checkout when a cart item's recipe
-  // needed more of an ingredient than was on hand — disabled per owner request: ingredient
-  // stock records aren't kept accurate enough for the block to be trustworthy, and it was
-  // stopping real sales. Stock still deducts normally on sale via deductStock().
-  async function checkStockBeforeCharge() {
-    setShowCharge(true)
-  }
-
   async function loadData() {
     // Step 1: Load from IndexedDB cache IMMEDIATELY — instant startup even offline
     const [cachedProds, cachedCats, cachedMods] = await Promise.all([
@@ -615,7 +603,7 @@ export default function POS() {
 
     if (openBillId) {
       // Rebuild item list from cart — cart is source of truth for the full order state
-      const allItems = cart.map(i => ({ sku:i.sku||'', name:i.name, qty:i.qty, price:i.price, modifiers:i.modifiers||{}, note:i.note||'', cat:i.cat||'', _sent:true, _station: getStation(i.cat), isBundle:i.isBundle||false, bundleItems:i.bundleItems||null }))
+      const allItems = cart.map(i => ({ sku:i.sku||'', name:i.name, qty:i.qty, price:i.price, modifiers:i.modifiers||{}, note:i.note||'', cat:i.cat||'', _sent:true, _station: getStation(i.cat), isBundle:i.isBundle||false, bundleItems:i.bundleItems||null, itemDisc:i.itemDisc||0, itemDiscLabel:i.itemDiscLabel||'' }))
       const ok = await dbWrite('orders', 'update', { items: allItems, subtotal, tax, discount: discAmt, total }, { id: openBillId })
       if (!ok) { alert('Gagal menyimpan tambahan pesanan — cek koneksi dan coba lagi.'); return }
       updateOrderCache({ id: openBillId, items: allItems, subtotal, tax, total, status: 'Open' })
@@ -624,14 +612,13 @@ export default function POS() {
       const orderId = 'ORD-' + Date.now()
       const order = {
         id: orderId,
-        items: cart.map(i => ({ sku:i.sku||'', name:i.name, qty:i.qty, price:i.price, modifiers:i.modifiers||{}, note:i.note||'', cat:i.cat||'', _sent:true, _station: getStation(i.cat), isBundle:i.isBundle||false, bundleItems:i.bundleItems||null })),
+        items: cart.map(i => ({ sku:i.sku||'', name:i.name, qty:i.qty, price:i.price, modifiers:i.modifiers||{}, note:i.note||'', cat:i.cat||'', _sent:true, _station: getStation(i.cat), isBundle:i.isBundle||false, bundleItems:i.bundleItems||null, itemDisc:i.itemDisc||0, itemDiscLabel:i.itemDiscLabel||'' })),
         subtotal, tax, discount: discAmt, total,
         pay: '-', staff: staff.name, table: capturedTable || null, table_area: capturedTableArea || null,
         ...(pax > 0 ? { pax } : {}),
         customer: customer ? customer.name : null, customer_id: customer ? customer.id : null,
         status: 'Open', date: now.toISOString().slice(0,10),
         time: now.toLocaleTimeString('id-ID', { hour:'2-digit', minute:'2-digit' }), cogs:0,
-        channel: ORDER_TYPE_TO_CHANNEL[orderType] || 'dine_in',
       }
       const ok = await dbWrite('orders', 'insert', order)
       if (!ok) { alert('Gagal simpan order'); return }
@@ -1086,7 +1073,6 @@ export default function POS() {
       payments: [{ method: payMethod, amount: finalTotal }],
       change: payMethod === 'Cash' ? Math.max(0, (parseInt(cashGiven)||0) - finalTotal) : 0,
       cogs: orderCogs,
-      channel: ORDER_TYPE_TO_CHANNEL[orderType] || 'dine_in',
     }
     const saved = await dbWrite('orders', 'insert', newOrder)
     if (!saved) { alert('⚠️ Gagal menyimpan order — cek koneksi dan coba lagi.'); return null }
@@ -1237,6 +1223,7 @@ export default function POS() {
           <button onClick={() => { if (staff?.permissions && !staff.permissions.cash) { alert('No cash in/out permission'); return } setShowCashLog(true) }} style={S.headerBtn} className="pos-hide-mobile">Cash</button>
           <button onClick={() => setShowReprint(true)} style={{ ...S.headerBtn, color:'#86EFAC' }} className="pos-hide-mobile">🖨 Reprint</button>
           <button onClick={() => setShowVoid(true)} style={{ ...S.headerBtn, color:'#FCA5A5' }} className="pos-hide-mobile">Void</button>
+          <button onClick={() => setShowDailyStock(true)} style={{ ...S.headerBtn, background:'rgba(255,255,255,0.18)', color:'#FDE047', fontWeight:700 }} className="pos-hide-mobile">📦 Audit Stok</button>
           <button onClick={() => setShowShift(true)} style={S.headerBtn} className="pos-hide-mobile">Shift</button>
           <button onClick={() => setShowMobileMenu(true)} style={{ ...S.headerBtn, fontSize:20, padding:'4px 10px' }}>☰</button>
         </div>
@@ -1257,7 +1244,7 @@ export default function POS() {
           onUpdateQty={updateQty}
           onClear={clearCart}
           onSendOrder={handleSendOrder}
-          onCharge={() => checkStockBeforeCharge()}
+          onCharge={() => setShowCharge(true)}
           onNewOrder={handleNewOrder}
           tableNo={tableNo}
           onTableNoChange={setTableNo}
@@ -1420,6 +1407,7 @@ export default function POS() {
             onClose={() => setShowDailyStock(false)}
             staff={staff}
             shift={shift}
+            printer={printer}
           />
         </Suspense>
       )}

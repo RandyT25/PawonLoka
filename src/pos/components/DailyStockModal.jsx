@@ -351,6 +351,7 @@ export default function DailyStockModal({ show, onClose, staff, shift }) {
                       <th style={{ ...styles.th, textAlign: 'center' }}>Awal</th>
                       <th style={{ ...styles.th, textAlign: 'center' }}>+Masuk</th>
                       <th style={{ ...styles.th, textAlign: 'center' }}>-Terjual</th>
+                      <th style={{ ...styles.th, textAlign: 'center' }}>-Waste/Adj</th>
                       <th style={{ ...styles.th, textAlign: 'center', background: '#F1F5F9' }}>Sisa Teori</th>
                       <th style={{ ...styles.th, textAlign: 'center', width: 190, background: '#EFF6FF' }}>Sisa Fisik (Input)</th>
                       <th style={{ ...styles.th, textAlign: 'center' }}>Selisih</th>
@@ -412,6 +413,9 @@ export default function DailyStockModal({ show, onClose, staff, shift }) {
                           </td>
                           <td style={{ ...styles.td, textAlign: 'center', color: item.sold_qty > 0 ? '#DE350B' : '#94A3B8', fontWeight: 600 }}>
                             {item.sold_qty > 0 ? `-${item.sold_qty}` : '0'}
+                          </td>
+                          <td style={{ ...styles.td, textAlign: 'center', color: item.waste_qty > 0 ? '#9A3412' : '#94A3B8', fontWeight: 600 }}>
+                            {item.waste_qty > 0 ? `-${item.waste_qty}` : '0'}
                           </td>
                           <td style={{ ...styles.td, textAlign: 'center', fontWeight: 800, color: '#1E293B', background: '#F8FAFC' }}>
                             {expected_sisa} {item.unit}
