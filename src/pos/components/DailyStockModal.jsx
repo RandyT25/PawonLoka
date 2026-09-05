@@ -24,8 +24,13 @@ export default function DailyStockModal({ show, onClose, staff, shift }) {
   const [notes, setNotes]           = useState('')
   const [expandedItem, setExpandedItem] = useState(null)
   const [savedSuccess, setSavedSuccess] = useState(false)
+  const [manualAdded, setManualAdded] = useState({})
+  const [onlineWarningChecked, setOnlineWarningChecked] = useState(false)
 
-  const today = useMemo(() => new Date().toISOString().slice(0, 10), [])
+  const today = useMemo(() => {
+    const d = new Date()
+    return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`
+  }, [])
 
   useEffect(() => {
     if (show) {
@@ -50,7 +55,7 @@ export default function DailyStockModal({ show, onClose, staff, shift }) {
         qr(supabase.from('recipes').select('product_id, ingredient_id, qty, unit, ingredient_name'), { ms: 5000 }),
         qr(supabase.from('orders').select('id, items, status').eq('date', today).eq('status', 'Paid'), { ms: 5000 }),
         qr(supabase.from('stock_movements').select('ingredient_id, type, qty, date').eq('date', today), { ms: 5000 }),
-        qr(supabase.from('staff_submissions').select('*').eq('type', 'daily_recon').order('submitted_at', { ascending: false }).limit(10), { ms: 5000 })
+        qr(supabase.from('staff_submissions').select('*').eq('type', 'daily_recon').order('submitted_at', { ascending: false }).limit(30), { ms: 5000 })
       ])
 
       const trackedIds = settings?.pos_behaviour?.daily_stock_items?.length
@@ -98,9 +103,11 @@ export default function DailyStockModal({ show, onClose, staff, shift }) {
       ;(todayMovements || []).forEach(mov => {
         const ingId = mov.ingredient_id
         const qty = parseFloat(mov.qty) || 0
-        if (mov.type === 'Production' || mov.type === 'PO Receive' || qty > 0) {
+        if (mov.type === 'Sale') return
+        
+        if (qty > 0) {
           additions[ingId] = (additions[ingId] || 0) + Math.abs(qty)
-        } else if (mov.type === 'Waste' || mov.type === 'Staff Meal') {
+        } else if (qty < 0) {
           waste[ingId] = (waste[ingId] || 0) + Math.abs(qty)
         }
       })
@@ -146,7 +153,8 @@ export default function DailyStockModal({ show, onClose, staff, shift }) {
           unit: ing.unit,
           cost_per_unit: ing.cost_per_unit || 0,
           opening_stock: Math.round(openingStock * 100) / 100,
-          added_qty: Math.round(added * 100) / 100,
+          auto_added_qty: Math.round(added * 100) / 100,
+        added_qty: Math.round(added * 100) / 100,
           sold_qty: Math.round(sold * 100) / 100,
           waste_qty: Math.round(wasted * 100) / 100,
           expected_sisa: Math.round(expectedSisa * 100) / 100,
@@ -184,16 +192,39 @@ export default function DailyStockModal({ show, onClose, staff, shift }) {
   }
 
   async function handleSubmit() {
+    if (!onlineWarningChecked) {
+      alert("⚠️ Tunggu! Pastikan Anda sudah mencentang konfirmasi bahwa semua pesanan online sudah diinput.");
+      return;
+    }
     setSaving(true)
     try {
       let totalVarianceValue = 0
-      const recordedItems = items.map(item => {
+      const movementsToInsert = [];
+    let stockUpdates = [];
+    const recordedItems = items.map(item => {
+      const finalAdded = manualAdded[item.id] !== undefined ? (parseFloat(manualAdded[item.id]) || 0) : item.added_qty;
+      const expected_sisa = Math.max(0, item.opening_stock + finalAdded - item.sold_qty - item.waste_qty);
+      const extraMasuk = finalAdded - item.auto_added_qty;
+      if (extraMasuk !== 0) {
+        movementsToInsert.push({
+          id: "MOV-" + Date.now() + "-" + Math.random().toString(36).slice(2,6),
+          type: extraMasuk > 0 ? "PO Receive" : "Adjustment",
+          ingredient_id: item.id,
+          ingredient_name: item.name,
+          qty: extraMasuk,
+          unit: item.unit,
+          note: "Manual Restock input from Daily Audit",
+          date: today,
+          time: new Date().toLocaleTimeString("id-ID",{hour:"2-digit",minute:"2-digit"})
+        });
+        stockUpdates.push({ id: item.id, qty: extraMasuk });
+      }
         const rawActual = counts[item.id]
         const actualQty = rawActual !== undefined && rawActual !== ''
           ? parseFloat(String(rawActual).replace(',', '.'))
-          : item.expected_sisa
+          : expected_sisa
         
-        const diff = Math.round((actualQty - item.expected_sisa) * 100) / 100
+        const diff = Math.round((actualQty - expected_sisa) * 100) / 100
         const diffValue = diff < 0 ? Math.abs(diff) * (item.cost_per_unit || 0) : 0
         totalVarianceValue += diffValue
 
@@ -203,10 +234,10 @@ export default function DailyStockModal({ show, onClose, staff, shift }) {
           unit: item.unit,
           cost_per_unit: item.cost_per_unit,
           opening_stock: item.opening_stock,
-          added_qty: item.added_qty,
+          added_qty: finalAdded,
           sold_qty: item.sold_qty,
           waste_qty: item.waste_qty,
-          expected_qty: item.expected_sisa,
+          expected_qty: expected_sisa,
           actual_qty: actualQty,
           diff_qty: diff,
           diff_value: Math.round(diffValue),
@@ -221,6 +252,18 @@ export default function DailyStockModal({ show, onClose, staff, shift }) {
       })
 
       const submissionId = 'SS-RECON-' + Date.now()
+      
+      // Update missing movements if any
+      if (movementsToInsert.length > 0) {
+        await supabase.from("stock_movements").insert(movementsToInsert);
+        for (const up of stockUpdates) {
+          const { data: ingData } = await supabase.from("ingredients").select("stock").eq("id", up.id).maybeSingle();
+          if (ingData) {
+            await supabase.from("ingredients").update({ stock: (parseFloat(ingData.stock)||0) + up.qty }).eq("id", up.id);
+          }
+        }
+      }
+      
       const payload = {
         id: submissionId,
         type: 'daily_recon',
@@ -321,7 +364,7 @@ export default function DailyStockModal({ show, onClose, staff, shift }) {
                         : null
                       
                       const hasInput = actualQty !== null && !isNaN(actualQty)
-                      const diff = hasInput ? Math.round((actualQty - item.expected_sisa) * 100) / 100 : 0
+                      const diff = hasInput ? Math.round((actualQty - expected_sisa) * 100) / 100 : 0
                       const hasBreakdown = Object.keys(item.sales_breakdown || {}).length > 0
                       const isExpanded = expandedItem === item.id
 
@@ -359,19 +402,25 @@ export default function DailyStockModal({ show, onClose, staff, shift }) {
                           </td>
                           <td style={{ ...styles.td, textAlign: 'center', color: '#64748B' }}>{item.opening_stock}</td>
                           <td style={{ ...styles.td, textAlign: 'center', color: item.added_qty > 0 ? '#00875A' : '#94A3B8' }}>
-                            {item.added_qty > 0 ? `+${item.added_qty}` : '—'}
+                            <input 
+                              type="number" 
+                              value={manualAdded[item.id] !== undefined ? manualAdded[item.id] : item.added_qty}
+                              onChange={e => setManualAdded(prev => ({...prev, [item.id]: e.target.value}))}
+                              style={{ ...styles.input, width: 60, padding: '4px', borderColor: '#86EFAC', color: '#166534', background: '#DCFCE7' }}
+                              placeholder={String(item.auto_added_qty)}
+                            />
                           </td>
                           <td style={{ ...styles.td, textAlign: 'center', color: item.sold_qty > 0 ? '#DE350B' : '#94A3B8', fontWeight: 600 }}>
                             {item.sold_qty > 0 ? `-${item.sold_qty}` : '0'}
                           </td>
                           <td style={{ ...styles.td, textAlign: 'center', fontWeight: 800, color: '#1E293B', background: '#F8FAFC' }}>
-                            {item.expected_sisa} {item.unit}
+                            {expected_sisa} {item.unit}
                           </td>
                           <td style={{ ...styles.td, textAlign: 'center', background: '#F0F9FF', padding: '6px 8px' }}>
                             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4 }}>
                               <button
                                 type="button"
-                                onClick={() => adjustCount(item.id, -1, item.expected_sisa)}
+                                onClick={() => adjustCount(item.id, -1, expected_sisa)}
                                 style={styles.stepperBtn}
                               >
                                 -
@@ -381,19 +430,19 @@ export default function DailyStockModal({ show, onClose, staff, shift }) {
                                 inputMode="decimal"
                                 value={counts[item.id] ?? ''}
                                 onChange={e => handleCountChange(item.id, e.target.value)}
-                                placeholder={String(item.expected_sisa)}
+                                placeholder={String(expected_sisa)}
                                 style={styles.input}
                               />
                               <button
                                 type="button"
-                                onClick={() => adjustCount(item.id, 1, item.expected_sisa)}
+                                onClick={() => adjustCount(item.id, 1, expected_sisa)}
                                 style={styles.stepperBtn}
                               >
                                 +
                               </button>
                               <button
                                 type="button"
-                                onClick={() => handleCountChange(item.id, String(item.expected_sisa))}
+                                onClick={() => handleCountChange(item.id, String(expected_sisa))}
                                 title="Isi sesuai sisa teori"
                                 style={styles.matchBtn}
                               >

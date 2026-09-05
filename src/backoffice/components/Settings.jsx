@@ -113,6 +113,7 @@ export default function Settings() {
             ["require_pin_void","Require PIN for void"],
             ["require_pin_refund","Require PIN for refund"],
             ["auto_member_discount","Auto-apply member discount (Gold 5%)"],
+            ["auto_accept_production","Auto-Accept Kitchen Production"],
           ].map(([k,l])=>(
             <label key={k} style={{ display:"flex", alignItems:"center", justifyContent:"space-between", padding:"10px 0", borderBottom:"1px solid var(--surface2)", cursor:"pointer" }}>
               <span style={{ fontSize:13, fontWeight:600 }}>{l}</span>
