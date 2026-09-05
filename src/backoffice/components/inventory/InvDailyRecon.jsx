@@ -377,11 +377,16 @@ export default function InvDailyRecon() {
             </div>
 
             <div className="bo-modal-body" style={{ maxHeight: "75vh", overflowY: "auto" }}>
-              {viewDetail.data?.notes && (
-                <div style={{ background: "#FEF3C7", padding: "10px 14px", borderRadius: 8, fontSize: 12.5, color: "#92400E", marginBottom: 14 }}>
-                  <b>Catatan Kasir:</b> {viewDetail.data.notes}
+              
+                <div style={{ background: "#F8FAFC", padding: "16px", borderRadius: 8, marginBottom: 24, border: "1px solid #E2E8F0" }}>
+                  <div style={{ color: "#334155", fontWeight: 700, marginBottom: 8, display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <span style={{ fontSize: 18 }}>📝</span> Catatan Kasir / Analisis Otomatis
+                  </div>
+                  <div style={{ color: "#475569", fontSize: 14, whiteSpace: "pre-wrap", lineHeight: 1.5 }}>
+                    {viewDetail.data.notes}
+                  </div>
                 </div>
-              )}
+              )})}
 
               <table className="bo-table" style={{ width: "100%" }}>
                 <thead>
@@ -413,6 +418,9 @@ export default function InvDailyRecon() {
                         <td style={{ textAlign: "center", color: it.sold_qty > 0 ? "#DE350B" : "var(--ink5)", fontWeight: 600 }}>
                           {it.sold_qty > 0 ? `-${it.sold_qty}` : "0"}
                         </td>
+                        <td style={{ textAlign: "center", color: it.waste_qty > 0 ? "#9A3412" : "var(--ink5)", fontWeight: 600 }}>
+                          {it.waste_qty > 0 ? `-${it.waste_qty}` : "0"}
+                        </td>
                         <td style={{ textAlign: "center", fontWeight: 700, background: "#F8FAFC" }}>
                           {it.expected_qty} {it.unit}
                         </td>
@@ -426,119 +434,4 @@ export default function InvDailyRecon() {
                             <span style={{ color: "#DE350B", fontWeight: 800 }}>{it.diff_qty} {it.unit}</span>
                           ) : (
                             <span style={{ color: "#F59E0B", fontWeight: 800 }}>+{it.diff_qty} {it.unit}</span>
-                          )}
-                        </td>
-                        <td style={{ textAlign: "right", fontWeight: 800, color: diffVal > 0 ? "#DE350B" : "var(--ink4)" }}>
-                          {diffVal > 0 ? `-${fmt(diffVal)}` : "Rp 0"}
-                        </td>
-                      </tr>
-                    )
-                  })}
-                </tbody>
-              </table>
-            </div>
-
-            <div className="bo-modal-footer" style={{ display: "flex", justifyContent: "space-between" }}>
-              <button onClick={() => setViewDetail(null)} className="bo-btn bo-btn-ghost">Tutup</button>
-              {viewDetail.status !== "approved" && (
-                <div style={{ display: "flex", gap: 8 }}>
-                  <button
-                    onClick={() => handleApprove(viewDetail, false)}
-                    className="bo-btn bo-btn-ghost"
-                    style={{ color: "#00875A" }}
-                  >
-                    Setujui Saja
-                  </button>
-                  <button
-                    onClick={() => handleApprove(viewDetail, true)}
-                    className="bo-btn bo-btn-primary"
-                  >
-                    Setujui & Perbarui Stok Live
-                  </button>
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* MANAGE TRACKED ITEMS MODAL */}
-      {showManageModal && (
-        <div className="bo-modal-overlay" onClick={() => setShowManageModal(false)}>
-          <div className="bo-modal" style={{ maxWidth: 640 }} onClick={e => e.stopPropagation()}>
-            <div className="bo-modal-header">
-              <div>
-                <div style={{ fontSize: 16, fontWeight: 800 }}>⚙️ Kelola Bahan Rekonsiliasi Harian</div>
-                <div style={{ fontSize: 12, color: "var(--ink4)" }}>
-                  Centang bahan yang wajib dihitung kasir setiap hari di POS.
-                </div>
-              </div>
-              <button className="bo-modal-close" onClick={() => setShowManageModal(false)}>✕</button>
-            </div>
-
-            <div className="bo-modal-body" style={{ maxHeight: "65vh", overflowY: "auto" }}>
-              <div style={{ marginBottom: 12 }}>
-                <input
-                  type="text"
-                  value={searchIng}
-                  onChange={e => setSearchIng(e.target.value)}
-                  placeholder="Cari bahan (misal: Sate, Ayam, Daging, Minyak)..."
-                  className="bo-input"
-                  style={{ width: "100%" }}
-                />
-              </div>
-
-              <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                {ingredients
-                  .filter(i => !searchIng || i.name.toLowerCase().includes(searchIng.toLowerCase()))
-                  .map(ing => {
-                    const isTracked = trackedItemIds.includes(ing.id)
-                    return (
-                      <div
-                        key={ing.id}
-                        onClick={() => handleToggleTracked(ing.id)}
-                        style={{
-                          display: "flex",
-                          alignItems: "center",
-                          justifyContent: "space-between",
-                          padding: "10px 14px",
-                          borderRadius: 8,
-                          border: `1.5px solid ${isTracked ? "var(--brand)" : "var(--surface2)"}`,
-                          background: isTracked ? "var(--brand-lt)" : "var(--surface)",
-                          cursor: "pointer"
-                        }}
-                      >
-                        <div>
-                          <div style={{ fontWeight: 700, color: isTracked ? "var(--brand)" : "var(--ink1)", fontSize: 13.5 }}>
-                            {ing.name}
-                          </div>
-                          <div style={{ fontSize: 11, color: "var(--ink4)" }}>
-                            Satuan: {ing.unit} · Stok Live: {ing.stock} {ing.unit} · Harga Modal: {fmt(ing.cost_per_unit)}
-                          </div>
-                        </div>
-
-                        <div>
-                          <input
-                            type="checkbox"
-                            checked={isTracked}
-                            onChange={() => {}} // handled by div onClick
-                            style={{ width: 18, height: 18, cursor: "pointer" }}
-                          />
-                        </div>
-                      </div>
-                    )
-                  })}
-              </div>
-            </div>
-
-            <div className="bo-modal-footer">
-              <button onClick={() => setShowManageModal(false)} className="bo-btn bo-btn-primary">
-                Selesai
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-    </div>
-  )
-}
+                          
