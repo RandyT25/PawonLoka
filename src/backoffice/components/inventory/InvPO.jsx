@@ -146,7 +146,7 @@ async function cascadeRecalc(updatedIngIds) {
 // processPaidPO did (so WAC accumulation order across items/POs in one bulk batch is
 // preserved), but collects the writes instead of awaiting each one — callers batch/
 // parallelize the actual persistence themselves.
-function computePaidPOChanges(po, ingMap) {
+function computePOStockChanges(po, ingMap) {
   const updatedIngIds = []
   const ingUpdates = {}
   const movements = []
@@ -583,9 +583,33 @@ export default function InvPO() {
       status:"Unpaid", subtotal:grandTotal, total:grandTotal, items:poItems_json
     }
     if (isEdit) {
+      if (editModal.stock_updated) {
+         // REVERSE OLD STOCK BEFORE APPLYING NEW!
+         const ingMap = {}
+         const revChanges = computeVoidPOChanges(editModal, ingMap)
+         await persistPaidPOChanges(revChanges.ingUpdates, revChanges.movements)
+         
+         // APPLY NEW STOCK
+         payload.stock_updated = true
+         const mockPo = { id: editModal.id, ...payload, po_items: poItems_json }
+         const newChanges = computePOStockChanges(mockPo, ingredients, ingMap)
+         if (Object.keys(newChanges.ingUpdates).length > 0) {
+            await persistPaidPOChanges(newChanges.ingUpdates, newChanges.movements)
+         }
+      }
       await supabase.from("purchase_orders").update(payload).eq("id", editModal.id)
     } else {
-      await supabase.from("purchase_orders").insert({ id:"PO-"+Date.now(), ...payload })
+      payload.stock_updated = true;
+      const newPoId = "PO-"+Date.now();
+      const mockPo = { id: newPoId, ...payload, po_items: poItems_json };
+      
+      const ingMap = {}
+      const changes = computePOStockChanges(mockPo, ingredients, ingMap)
+      
+      await supabase.from("purchase_orders").insert({ id: newPoId, ...payload })
+      if (Object.keys(changes.ingUpdates).length > 0) {
+         await persistPaidPOChanges(changes.ingUpdates, changes.movements)
+      }
     }
     await load()
     setNewPO(false); setEditModal(null)
