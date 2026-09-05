@@ -363,7 +363,7 @@ export default function InvDailyRecon() {
       {/* DETAIL MODAL */}
       {viewDetail && (
         <div className="bo-modal-overlay" onClick={() => setViewDetail(null)}>
-          <div className="bo-modal" style={{ maxWidth: 1100 }} onClick={e => e.stopPropagation()}>
+          <div className="bo-modal" style={{ maxWidth: 1200 }} onClick={e => e.stopPropagation()}>
             <div className="bo-modal-header">
               <div>
                 <div style={{ fontSize: 16, fontWeight: 800 }}>
@@ -396,7 +396,8 @@ export default function InvDailyRecon() {
                     <th style={{ textAlign: "center", whiteSpace: "nowrap" }}>+Masuk</th>
                     <th style={{ textAlign: "center", whiteSpace: "nowrap" }}>-Terjual</th>
                     <th style={{ textAlign: "center", whiteSpace: "nowrap" }}>-Produksi</th>
-                    <th style={{ textAlign: "center", whiteSpace: "nowrap" }}>-Waste/Adj</th>
+                    <th style={{ textAlign: "center", whiteSpace: "nowrap" }}>-Waste</th>
+                    <th style={{ textAlign: "center", whiteSpace: "nowrap" }}>+/- Adj</th>
                     <th style={{ textAlign: "center", background: "#F1F5F9", whiteSpace: "nowrap" }}>Sisa Teori</th>
                     <th style={{ textAlign: "center", background: "#EFF6FF", whiteSpace: "nowrap" }}>Sisa Fisik</th>
                     <th style={{ textAlign: "center", whiteSpace: "nowrap" }}>Selisih</th>
@@ -427,8 +428,11 @@ export default function InvDailyRecon() {
                         <td style={{ textAlign: "center", color: (it.production_qty || 0) > 0 ? "#D97706" : "var(--ink5)", fontWeight: 600 }}>
                           {(it.production_qty || 0) > 0 ? `-${it.production_qty}` : "0"}
                         </td>
-                        <td style={{ textAlign: "center", color: it.waste_qty > 0 ? "#9A3412" : "var(--ink5)", fontWeight: 600 }}>
-                          {it.waste_qty > 0 ? `-${it.waste_qty}` : "0"}
+                        <td style={{ textAlign: "center", color: (it.waste_qty || 0) > 0 ? "#9A3412" : "var(--ink5)", fontWeight: 600 }}>
+                          {(it.waste_qty || 0) > 0 ? `-${it.waste_qty}` : "0"}
+                        </td>
+                        <td style={{ textAlign: "center", color: (it.adj_qty || 0) !== 0 ? "#475569" : "var(--ink5)", fontWeight: 600 }}>
+                          {(it.adj_qty || 0) > 0 ? `+${it.adj_qty}` : (it.adj_qty || 0) < 0 ? it.adj_qty : "0"}
                         </td>
                         <td style={{ textAlign: "center", fontWeight: 700, background: "#F8FAFC" }}>
                           {it.expected_qty} {it.unit}

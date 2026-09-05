@@ -101,16 +101,19 @@ export default function DailyStockModal({ show, onClose, staff, shift }) {
       const additions = {}
       const waste = {}
       const production_deductions = {}
+      const adjustments = {}
       ;(todayMovements || []).forEach(mov => {
         const ingId = mov.ingredient_id
         const qty = parseFloat(mov.qty) || 0
-        if (mov.type === 'Sale') return
+        if (mov.type === 'Sale' || mov.type === 'Stock Reset' || mov.type === 'Void') return
         
-        if (qty > 0) {
+        if (mov.type === 'Adjustment') {
+           adjustments[ingId] = (adjustments[ingId] || 0) + qty
+        } else if (qty > 0) {
           additions[ingId] = (additions[ingId] || 0) + Math.abs(qty)
         } else if (qty < 0 && mov.type === 'Production') {
           production_deductions[ingId] = (production_deductions[ingId] || 0) + Math.abs(qty)
-        } else if (qty < 0) {
+        } else if (qty < 0 && mov.type === 'Waste') {
           waste[ingId] = (waste[ingId] || 0) + Math.abs(qty)
         }
       })
@@ -144,12 +147,13 @@ export default function DailyStockModal({ show, onClose, staff, shift }) {
         const added = additions[ingId] || 0
         const wasted = waste[ingId] || 0
         const prodDed = production_deductions[ingId] || 0
+        const adj = adjustments[ingId] || 0
         
         const currentLiveStock = parseFloat(ing.stock) || 0
         const openingStock = prevCountsMap[ingId] !== undefined
           ? prevCountsMap[ingId]
-          : Math.max(0, currentLiveStock + sold + wasted + prodDed - added)
-        const expectedSisa = Math.max(0, openingStock + added - sold - wasted - prodDed)
+          : Math.max(0, currentLiveStock + sold + wasted + prodDed - added - adj)
+        const expectedSisa = Math.max(0, openingStock + added + adj - sold - wasted - prodDed)
 
         return {
           id: ing.id,
@@ -162,6 +166,7 @@ export default function DailyStockModal({ show, onClose, staff, shift }) {
           sold_qty: Math.round(sold * 100) / 100,
           waste_qty: Math.round(wasted * 100) / 100,
           production_qty: Math.round(prodDed * 100) / 100,
+          adj_qty: Math.round(adj * 100) / 100,
           expected_sisa: Math.round(expectedSisa * 100) / 100,
           sales_breakdown: breakdown
         }
@@ -211,7 +216,7 @@ export default function DailyStockModal({ show, onClose, staff, shift }) {
       
       // expected_sisa MUST use auto_added_qty (True System Math), NOT finalAdded (Nita's claim)!
       // This ensures that if Nita fakes a +Masuk to hide a shortage, the Teori still catches it!
-      const expected_sisa = Math.max(0, item.opening_stock + item.auto_added_qty - item.sold_qty - item.waste_qty - (item.production_qty||0));
+      const expected_sisa = Math.max(0, item.opening_stock + item.auto_added_qty + (item.adj_qty||0) - item.sold_qty - item.waste_qty - (item.production_qty||0));
 
       
       // REMOVED AUTO-INJECTION: We no longer magically create stock movements based on Nita's input.
@@ -237,6 +242,7 @@ export default function DailyStockModal({ show, onClose, staff, shift }) {
           sold_qty: item.sold_qty,
           waste_qty: item.waste_qty,
           production_qty: item.production_qty,
+          adj_qty: item.adj_qty,
           expected_qty: expected_sisa,
           actual_qty: actualQty,
           diff_qty: diff,
@@ -414,8 +420,11 @@ export default function DailyStockModal({ show, onClose, staff, shift }) {
                           <td style={{ ...styles.td, textAlign: 'center', color: item.sold_qty > 0 ? '#DE350B' : '#94A3B8', fontWeight: 600 }}>
                             {item.sold_qty > 0 ? `-${item.sold_qty}` : '0'}
                           </td>
-                          <td style={{ ...styles.td, textAlign: 'center', color: item.waste_qty > 0 ? '#9A3412' : '#94A3B8', fontWeight: 600 }}>
-                            {item.waste_qty > 0 ? `-${item.waste_qty}` : '0'}
+                          <td style={{ ...styles.td, textAlign: 'center', color: (item.waste_qty || 0) > 0 ? '#9A3412' : '#94A3B8', fontWeight: 600 }}>
+                            {(item.waste_qty || 0) > 0 ? `-${item.waste_qty}` : '0'}
+                          </td>
+                          <td style={{ ...styles.td, textAlign: 'center', color: (item.adj_qty || 0) !== 0 ? '#475569' : '#94A3B8', fontWeight: 600 }}>
+                            {(item.adj_qty || 0) > 0 ? `+${item.adj_qty}` : (item.adj_qty || 0) < 0 ? item.adj_qty : '0'}
                           </td>
                           <td style={{ ...styles.td, textAlign: 'center', fontWeight: 800, color: '#1E293B', background: '#F8FAFC' }}>
                             {expected_sisa} {item.unit}
