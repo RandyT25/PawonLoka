@@ -1,4 +1,7 @@
-import { useState, useEffect } from "react"
+import { useState, useEffect, useCallback } from "react"
+import DateRangePicker, { buildDateRange } from "../DateRangePicker"
+
+const today = () => new Date().toISOString().slice(0, 10)
 import { supabase } from "../../../lib/supabase"
 
 function fmt(n) { return "Rp " + Number(n||0).toLocaleString("id-ID") }
@@ -7,24 +10,35 @@ export default function InvStaffConsumption() {
   const [records,     setRecords]     = useState([])
   const [ingredients, setIngredients] = useState([])
   const [staff,       setStaff]       = useState([])
+
+  const [range,        setRange]        = useState("month")
+  const [customDate,   setCustomDate]   = useState(today())
+  const [customDateTo, setCustomDateTo] = useState(today())
+  const [lastUpdated,  setLastUpdated]  = useState(null)
+
   const [modal,       setModal]       = useState(false)
   const [form,        setForm]        = useState({ ingredient_id:"", qty:"", unit:"", date:new Date().toISOString().slice(0,10), consumed_by:"", notes:"" })
   const [costPreview, setCostPreview] = useState(0)
   const [saving,      setSaving]      = useState(false)
   const [loading,     setLoading]     = useState(true)
 
-  useEffect(() => { load() }, [])
+  useEffect(() => { load() }, [load])
 
-  async function load() {
+  const load = useCallback(async () => {
+    const { fromStr, toStr } = buildDateRange(range, customDate, customDateTo)
+    const fromDate = fromStr.slice(0, 10)
+    const toDate   = toStr ? toStr.slice(0, 10) : today()
+
     setLoading(true)
     const [{ data:r }, { data:i }, { data:s }] = await Promise.all([
-      supabase.from("staff_consumption").select("*").order("created_at", { ascending:false }),
+      supabase.from("staff_consumption").select("*").gte("date", fromDate).lte("date", toDate).order("created_at", { ascending:false }),
       supabase.from("ingredients").select("id,name,unit,stock,cost_per_unit"),
       supabase.from("staff").select("id,name"),
     ])
     setRecords(r||[]); setIngredients(i||[]); setStaff(s||[])
+    setLastUpdated(new Date())
     setLoading(false)
-  }
+  }, [range, customDate, customDateTo])
 
   function updateForm(k,v) {
     setForm(f => {
@@ -84,6 +98,10 @@ export default function InvStaffConsumption() {
   return (
     <div>
       {/* Stats */}
+      <DateRangePicker range={range} setRange={setRange} customDate={customDate} setCustomDate={setCustomDate}
+        customDateTo={customDateTo} setCustomDateTo={setCustomDateTo}
+        loading={loading} lastUpdated={lastUpdated} onRefresh={load} />
+
       <div className="bo-metrics" style={{ gridTemplateColumns:"repeat(3,1fr)", marginBottom:16 }}>
         <div className="bo-met amber"><div className="bo-met-label">Total Records</div><div className="bo-met-val">{records.length}</div><div className="bo-met-sub">all time</div></div>
         <div className="bo-met amber"><div className="bo-met-label">Total Cost</div><div className="bo-met-val">{fmt(totalCost)}</div><div className="bo-met-sub">value taken</div></div>

@@ -1,4 +1,7 @@
-import { useState, useEffect } from "react"
+import { useState, useEffect, useCallback } from "react"
+import DateRangePicker, { buildDateRange } from "../DateRangePicker"
+
+const today = () => new Date().toISOString().slice(0, 10)
 import { supabase } from "../../../lib/supabase"
 
 function fmt(n) { return "Rp " + Number(n||0).toLocaleString("id-ID") }
@@ -9,19 +12,30 @@ export default function InvOpname() {
   const [activeCount, setActiveCount] = useState(null) // null or array of count items
   const [viewModal,   setViewModal]   = useState(null)
   const [submitting,  setSubmitting]  = useState(false)
-  const [loading,     setLoading]     = useState(true)
+  const [loading,       setLoading]       = useState(true)
 
-  useEffect(() => { load() }, [])
+  const [range,        setRange]        = useState("month")
+  const [customDate,   setCustomDate]   = useState(today())
+  const [customDateTo, setCustomDateTo] = useState(today())
+  const [lastUpdated,  setLastUpdated]  = useState(null)
 
-  async function load() {
+
+  useEffect(() => { load() }, [load])
+
+  const load = useCallback(async () => {
+    const { fromStr, toStr } = buildDateRange(range, customDate, customDateTo)
+    const fromDate = fromStr.slice(0, 10)
+    const toDate   = toStr ? toStr.slice(0, 10) : today()
+
     setLoading(true)
     const [{ data:s }, { data:i }] = await Promise.all([
-      supabase.from("stock_opname").select("*").order("created_at", { ascending:false }),
+      supabase.from("stock_opname").select("*").gte("date", fromDate).lte("date", toDate).order("created_at", { ascending:false }),
       supabase.from("ingredients").select("*").order("name"),
     ])
     setSessions(s||[]); setIngredients(i||[])
+    setLastUpdated(new Date())
     setLoading(false)
-  }
+  }, [range, customDate, customDateTo])
 
   function startOpname() {
     setActiveCount(ingredients.map(i => ({
@@ -83,7 +97,11 @@ export default function InvOpname() {
   if (activeCount) {
     return (
       <div>
-        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:16 }}>
+        <DateRangePicker range={range} setRange={setRange} customDate={customDate} setCustomDate={setCustomDate}
+        customDateTo={customDateTo} setCustomDateTo={setCustomDateTo}
+        loading={loading} lastUpdated={lastUpdated} onRefresh={load} />
+
+      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:16 }}>
           <div style={{ fontSize:14, fontWeight:700, color:"var(--ink)" }}>📋 Active Stock Count Session</div>
           <div style={{ display:"flex", gap:8 }}>
             <button onClick={()=>setActiveCount(null)} className="bo-btn bo-btn-ghost">Cancel</button>

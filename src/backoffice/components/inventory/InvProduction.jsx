@@ -1,4 +1,7 @@
-import { useState, useEffect } from "react"
+import { useState, useEffect, useCallback } from "react"
+import DateRangePicker, { buildDateRange } from "../DateRangePicker"
+
+const today = () => new Date().toISOString().slice(0, 10)
 import { supabase } from "../../../lib/supabase"
 import { toBaseUnit } from "../../../shared/unitConversion"
 
@@ -19,21 +22,32 @@ export default function InvProduction() {
   const [saving,        setSaving]        = useState(false)
   const [loading,       setLoading]       = useState(true)
 
-  useEffect(() => { load() }, [])
+  const [range,        setRange]        = useState("month")
+  const [customDate,   setCustomDate]   = useState(today())
+  const [customDateTo, setCustomDateTo] = useState(today())
+  const [lastUpdated,  setLastUpdated]  = useState(null)
 
-  async function load() {
+
+  useEffect(() => { load() }, [load])
+
+  const load = useCallback(async () => {
+    const { fromStr, toStr } = buildDateRange(range, customDate, customDateTo)
+    const fromDate = fromStr.slice(0, 10)
+    const toDate   = toStr ? toStr.slice(0, 10) : today()
+
     setLoading(true)
     const [{ data:b }, { data:i }, { data:s }, { data:sr }, { data:sri }] = await Promise.all([
-      supabase.from("production_batches").select("*").order("created_at", { ascending:false }),
+      supabase.from("production_batches").select("*").gte("date", fromDate).lte("date", toDate).order("created_at", { ascending:false }),
       supabase.from("ingredients").select("id,name,unit,stock,cost_per_unit,category,conversions"),
       supabase.from("staff").select("id,name"),
       supabase.from("sub_recipes").select("*").order("name"),
       supabase.from("sub_recipe_ingredients").select("*"),
     ])
     setBatches(b||[]); setIngredients(i||[]); setStaff(s||[])
+    setLastUpdated(new Date())
     setSubRecipes(sr||[]); setSubRecipeIngs(sri||[])
     setLoading(false)
-  }
+  }, [range, customDate, customDateTo])
 
   function selectRecipe(id) {
     setRecipeId(id)
